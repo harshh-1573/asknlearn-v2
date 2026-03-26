@@ -1,0 +1,39 @@
+# ======================
+# ENV FILES (CRITICAL)
+# ======================
+.env
+backend-node/.env
+backend-python/.env
+
+# ======================
+# NODE
+# ======================
+node_modules/
+backend-node/node_modules/
+frontend/node_modules/
+
+# ======================
+# BUILD FILES
+# ======================
+dist/
+frontend/dist/
+
+# ======================
+# PYTHON
+# ======================
+__pycache__/
+*.pyc
+venv/
+
+# ======================
+# RUNTIME FILES
+# ======================
+backend-node/uploads/
+backend-node/logs/
+backend-python/temp_uploads/
+
+# ======================
+# OS FILES
+# ======================
+.DS_Store
+Thumbs.db
