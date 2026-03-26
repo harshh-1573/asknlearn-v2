@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import {
     ArrowLeft, BookOpenCheck, Clock3, ListOrdered, Loader2, Sparkles,
-    Trophy, TrendingUp, X, BarChart3, History, Target, CheckCircle2
+    Trophy, TrendingUp, X, BarChart3, History, Target, CheckCircle2,
+    BrainCircuit
 } from 'lucide-react';
 
 const iconPalette = [
@@ -41,6 +42,7 @@ const CSQuizMaster = () => {
                     stats: res.data.stats || null,
                     history: res.data.history || [],
                     progress: res.data.progress || [],
+                    heatmap: res.data.heatmap || [],
                 });
             } catch (err) {
                 console.error('Failed to load CS Quiz dashboard:', err);
@@ -61,13 +63,37 @@ const CSQuizMaster = () => {
     const startQuiz = () => {
         if (!selectedSubject) return;
 
-        navigate(`/quiz/${selectedSubject.id}`, {
+        const heatmapStat = dashboard.heatmap?.find(h => h.subject_id === selectedSubject.id);
+        const bias = (heatmapStat && Number(heatmapStat.average_percentage) < 60) ? 'foundation' : 'medium';
+
+        navigate(`/quiz/${selectedSubject.id}?bias=${bias}`, {
             state: {
                 limit: config.limit,
                 timer: config.timer,
                 subjectName: selectedSubject.name,
             },
         });
+    };
+
+    const handleWeaknessGenerator = () => {
+        const sortedHeatmap = [...(dashboard.heatmap || [])]
+            .filter(item => Number(item.average_percentage) < 75 && Number(item.total_attempts) > 0)
+            .sort((a, b) => Number(a.average_percentage) - Number(b.average_percentage))
+            .slice(0, 3);
+            
+        if (!sortedHeatmap.length) {
+            alert("You don't have any weak subjects yet! Play more quizzes so we can analyze your performance.");
+            return;
+        }
+
+        const weakSubjectIds = sortedHeatmap.map(s => s.subject_id);
+        const weakNames = dashboard.subjects
+            .filter(s => weakSubjectIds.includes(s.id))
+            .map(s => s.name);
+
+        const prompt = `The student is currently struggling with these specific Computer Science topics: ${weakNames.join(', ')}. Generate a strictly targeted 10-question MCQ practice exam that focuses purely on these core foundational concepts to help them improve. Include detailed explanations.`;
+        
+        navigate('/ai-upload', { state: { autoPrompt: prompt } });
     };
 
     const stats = dashboard.stats || {
@@ -161,28 +187,59 @@ const CSQuizMaster = () => {
                 <section className="mb-12">
                     <div className="flex items-center gap-3 mb-6">
                         <Sparkles size={22} className="text-blue-400" />
-                        <h2 className="text-3xl font-bold tracking-tight">Choose a Subject</h2>
+                        <h2 className="text-3xl font-bold tracking-tight">Choose a Subject (Heatmap)</h2>
+                    </div>
+                    
+                    <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/5 border border-white/10 rounded-2xl p-5">
+                        <div className="flex items-center gap-4 text-sm font-semibold">
+                            <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-emerald-500"></div> &gt; 80% (Mastered)</span>
+                            <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-yellow-400"></div> 60 - 80% (Average)</span>
+                            <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-500"></div> &lt; 60% (Needs Work)</span>
+                            <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-neutral-600"></div> Unattempted</span>
+                        </div>
+                        <button onClick={handleWeaknessGenerator} className="bg-[linear-gradient(120deg,#f43f5e,#fb923c)] hover:opacity-90 transition-opacity text-white rounded-xl px-5 py-3 text-sm font-bold flex items-center justify-center gap-2 shadow-lg shadow-rose-500/20">
+                            <BrainCircuit size={16} /> Generate Quiz on Weaknesses
+                        </button>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
                         {dashboard.subjects.map((subject, index) => {
                             const progress = progressMap[subject.id];
-                            const accent = iconPalette[index % iconPalette.length];
+                            const heat = dashboard.heatmap?.find(h => h.subject_id === subject.id);
+                            const avgValue = heat ? Number(heat.average_percentage) : null;
+                            
+                            let accentColor = 'border-white/10 text-neutral-400 bg-white/5';
+                            let iconColor = 'text-white/50 bg-black/40 border-white/5';
+                            
+                            if (avgValue !== null) {
+                                if (avgValue >= 80) {
+                                    accentColor = 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100';
+                                    iconColor = 'text-emerald-400 bg-emerald-950/50 border-emerald-500/20';
+                                } else if (avgValue >= 60) {
+                                    accentColor = 'border-yellow-400/30 bg-yellow-400/10 text-yellow-100';
+                                    iconColor = 'text-yellow-400 bg-yellow-950/50 border-yellow-400/20';
+                                } else {
+                                    accentColor = 'border-red-500/30 bg-red-500/10 text-red-100';
+                                    iconColor = 'text-red-400 bg-red-950/50 border-red-500/20';
+                                }
+                            }
 
                             return (
                                 <button
                                     key={subject.id}
                                     onClick={() => setSelectedSubject(subject)}
-                                    className="group bg-white/5 border border-white/10 p-7 rounded-3xl hover:bg-white/10 hover:border-white/20 transition-all duration-300 text-left backdrop-blur-xl"
+                                    className={`group border p-7 rounded-3xl hover:-translate-y-1 transition-all duration-300 text-left backdrop-blur-xl ${accentColor}`}
                                 >
                                     <div className="flex items-start justify-between gap-4 mb-8">
-                                        <div className={`${accent} bg-black/40 p-4 rounded-2xl border border-white/5`}>
+                                        <div className={`p-4 rounded-2xl border ${iconColor}`}>
                                             <BookOpenCheck size={28} />
                                         </div>
-                                        <Sparkles size={18} className="text-neutral-600 group-hover:text-white transition-colors" />
+                                        <div className="text-right">
+                                            {avgValue !== null ? <span className="font-black text-xl">{avgValue.toFixed(1)}%</span> : <span className="text-xs uppercase tracking-widest opacity-50">NEW</span>}
+                                        </div>
                                     </div>
                                     <h3 className="text-2xl font-semibold mb-3">{subject.name}</h3>
-                                    <p className="text-neutral-400 text-sm mb-4">
+                                    <p className="text-sm mb-4 opacity-70">
                                         {subject.question_count} questions available
                                     </p>
                                     {progress ? (

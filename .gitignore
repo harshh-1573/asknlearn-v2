@@ -37,3 +37,15 @@ backend-python/temp_uploads/
 # ======================
 .DS_Store
 Thumbs.db
+
+
+# Ignore input files
+inputs/
+*.mp4
+*.mp3
+*.pptx
+*.pdf
+*.docx
+*.jpg
+*.jpeg
+*.png

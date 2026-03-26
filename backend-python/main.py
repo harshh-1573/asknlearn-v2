@@ -460,33 +460,72 @@ async def chat_about_material(
     generatedJson: str = Form(default="{}"),
     history: str = Form(default="[]"),
     language: str = Form(default="English"),
+    socratic_mode: bool = Form(default=False),
 ):
     if not question.strip():
         raise HTTPException(status_code=400, detail="Question is required.")
 
     generated = _safe_json_loads(generatedJson, {})
     chat_history = _safe_json_loads(history, [])
-    prompt = f"""You are AsknLearn Tutor, a precise study coach.
+    if socratic_mode:
+        prompt = f"""You are AsknLearn Tutor, practicing Socratic method.
+Answer in {language}.
+Instead of giving the direct answer immediately, ask a guiding question that helps the user figure it out themselves.
+Still be friendly and encouraging.
+
+Source material:
+{sourceText[:8000]}
+
+User question:
+{question}
+"""
+    else:
+        prompt = f"""You are AsknLearn Tutor, a precise study coach.
 Answer in {language}.
 Use ONLY the information in source material and generated content.
 If answer is not present, clearly say it is not in provided material.
 
 Source material:
-{sourceText[:10000]}
+{sourceText[:4000]}
 
 Generated content JSON:
-{json.dumps(generated)[:8000]}
+{json.dumps(generated)[:4000]}
 
 Conversation history:
-{json.dumps(chat_history)[:4000]}
+{json.dumps(chat_history)[:2000]}
 
 User question:
 {question}
 """
+
+    prompt += """
+
+CRITICAL REQUIRED OUTPUT FORMAT:
+You MUST respond with a valid JSON block enclosed in ```json and ```.
+The JSON must have this exact structure:
+{
+  "answer": "your detailed response here...",
+  "suggested_followups": ["Question 1?", "Question 2?", "Question 3?"]
+}
+"""
     try:
         generation = _generate_with_gemini(prompt, preferred_model=os.getenv("GEMINI_MODEL", ""))
+        text = generation["response_text"].strip()
+        
+        # Cleanup markdown JSON blocks
+        if "```json" in text:
+            text = text.split("```json")[-1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[-1].split("```")[0].strip()
+            
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = {"answer": generation["response_text"], "suggested_followups": []}
+
         return {
-            "answer": generation["response_text"],
+            "answer": parsed.get("answer", generation["response_text"]),
+            "suggested_followups": parsed.get("suggested_followups", []),
             "model_used": generation["model_used"],
         }
     except Exception as error:

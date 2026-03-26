@@ -21,6 +21,10 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING, 
         allowNull: false,
         field: 'password'
+    },
+    xp_points: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0
     }
 }, {
     tableName: 'users',

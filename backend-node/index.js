@@ -5,7 +5,8 @@ const path = require('path');
 const axios = require('axios');
 const FormData = require('form-data');
 const multer = require('multer');
-const { QueryTypes } = require('sequelize');
+const { Sequelize, QueryTypes } = require('sequelize');
+const bcrypt = require('bcryptjs');
 const sequelize = require('./config/db');
 require('dotenv').config();
 const authRoutes = require('./routes/auth');
@@ -414,6 +415,7 @@ app.post('/api/ai/chat', async (req, res) => {
         payload.append('generatedJson', JSON.stringify(generatedJson || {}));
         payload.append('history', JSON.stringify(history || []));
         payload.append('language', String(language || 'English'));
+        payload.append('socratic_mode', String(req.body.socraticMode || 'false'));
 
         const response = await axios.post(`${pythonServiceUrl}/chat`, payload, {
             headers: payload.getHeaders(),
@@ -459,6 +461,7 @@ app.post('/api/ai/chat', async (req, res) => {
 
         return res.json({
             answer,
+            suggestedFollowups: response.data?.suggested_followups || [],
             modelUsed: response.data?.model_used || null,
         });
     } catch (error) {
@@ -509,13 +512,20 @@ app.get('/api/questions/:subjectId', async (req, res) => {
                 option_c,
                 option_d,
                 LOWER(correct_option) AS correct_answer,
-                explanation
+                explanation,
+                COALESCE(difficulty, 'medium') AS difficulty
              FROM questions
              WHERE subject_id = :subjectId
-             ORDER BY RAND()
+             ORDER BY 
+                CASE 
+                   WHEN :bias = 'foundation' AND difficulty = 'foundation' THEN 1
+                   WHEN :bias = 'foundation' AND difficulty = 'medium' THEN 2
+                   WHEN :bias = 'foundation' AND difficulty = 'advanced' THEN 3
+                   ELSE RAND() 
+                END ASC, RAND()
              LIMIT :limit`,
             {
-                replacements: { subjectId, limit },
+                replacements: { subjectId, limit, bias: String(req.query.bias || '') },
                 type: QueryTypes.SELECT,
             }
         );
@@ -535,9 +545,9 @@ app.get('/api/cs-quiz/dashboard/:userId', async (req, res) => {
             return res.status(400).json({ error: 'Invalid userId' });
         }
 
-        const [subjects, statsRow, history, progress] = await Promise.all([
+        const [subjects, statsRow, history, progress, heatmapRow] = await Promise.all([
             sequelize.query(
-                `SELECT
+                `SELECT 
                     s.id,
                     s.name,
                     COUNT(q.id) AS question_count
@@ -595,6 +605,20 @@ app.get('/api/cs-quiz/dashboard/:userId', async (req, res) => {
                     type: QueryTypes.SELECT,
                 }
             ),
+            sequelize.query(
+                `SELECT 
+                    subject_id,
+                    COUNT(*) as total_attempts,
+                    COALESCE(ROUND((SUM(score) / NULLIF(SUM(total_questions), 0)) * 100, 1), 0) AS average_percentage,
+                    COALESCE(MAX(ROUND((score / NULLIF(total_questions, 0)) * 100, 1)), 0) AS best_percentage
+                 FROM user_scores
+                 WHERE user_id = :userId
+                 GROUP BY subject_id`,
+                {
+                    replacements: { userId },
+                    type: QueryTypes.SELECT,
+                }
+            ),
         ]);
 
         return res.json({
@@ -608,6 +632,7 @@ app.get('/api/cs-quiz/dashboard/:userId', async (req, res) => {
             },
             history,
             progress,
+            heatmap: heatmapRow || [],
         });
     } catch (error) {
         writeErrorLog('DASHBOARD_FETCH_ERROR', { message: error.message });
@@ -716,12 +741,65 @@ app.post('/api/submit-quiz', async (req, res) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+app.get('/api/user/:userId/xp', async (req, res) => {
+    try {
+        const userId = parseInt(req.params.userId, 10);
+        if (Number.isNaN(userId)) return res.status(400).json({ error: 'Invalid userId' });
+        
+        const rows = await sequelize.query(`SELECT xp_points FROM users WHERE id = :userId LIMIT 1`, {
+            replacements: { userId }, type: QueryTypes.SELECT
+        });
+        
+        return res.json({ xp_points: rows[0]?.xp_points || 0 });
+    } catch (e) {
+        return res.status(500).json({ error: 'Failed to fetch XP' });
+    }
+});
+
+app.post('/api/user/:userId/xp', async (req, res) => {
+    try {
+        const userId = parseInt(req.params.userId, 10);
+        const amount = parseInt(req.body.amount, 10) || 10;
+        if (Number.isNaN(userId)) return res.status(400).json({ error: 'Invalid userId' });
+        
+        await sequelize.query(`UPDATE users SET xp_points = COALESCE(xp_points, 0) + :amount WHERE id = :userId`, {
+            replacements: { userId, amount }, type: QueryTypes.UPDATE
+        });
+        
+        const rows = await sequelize.query(`SELECT xp_points FROM users WHERE id = :userId LIMIT 1`, {
+            replacements: { userId }, type: QueryTypes.SELECT
+        });
+        
+        return res.json({ xp_points: rows[0]?.xp_points || 0, added: amount });
+    } catch (e) {
+        return res.status(500).json({ error: 'Failed to increment XP' });
+    }
+});
+
 app.use((err, req, res, _next) => {
     writeErrorLog('EXPRESS_ERROR', { message: err.message });
     return res.status(500).json({ error: 'Internal Server Error' });
 });
 
 const PORT = process.env.PORT || 5000;
-sequelize.sync().then(() => {
+sequelize.sync().then(async () => {
+    try {
+        await sequelize.query('ALTER TABLE users ADD COLUMN xp_points INT DEFAULT 0;', { type: QueryTypes.RAW });
+        console.log('✅ Gamification Enabled: xp_points column verified in users table.');
+    } catch (e) {}
+
+    try {
+        await sequelize.query("ALTER TABLE questions ADD COLUMN difficulty VARCHAR(50) DEFAULT 'medium';", { type: QueryTypes.RAW });
+        console.log('✅ Dynamic Difficulty Enabled: difficulty column verified in questions table.');
+    } catch (e) {}
+
+    try {
+        await sequelize.query('ALTER TABLE users ADD COLUMN phone VARCHAR(20) DEFAULT NULL;', { type: QueryTypes.RAW });
+        await sequelize.query('ALTER TABLE users ADD COLUMN bio TEXT DEFAULT NULL;', { type: QueryTypes.RAW });
+        await sequelize.query("ALTER TABLE users ADD COLUMN language VARCHAR(50) DEFAULT 'English';", { type: QueryTypes.RAW });
+        await sequelize.query('ALTER TABLE users ADD COLUMN avatar_url VARCHAR(255) DEFAULT NULL;', { type: QueryTypes.RAW });
+        console.log('✅ Profile Management Enabled: profile columns verified in users table.');
+    } catch (e) {}
+
     app.listen(PORT, () => console.log(`Quiz Engine running on port ${PORT}`));
 });

@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import {
     ArrowLeft, Bot, BrainCircuit, Boxes, Check, ChevronDown, ChevronUp, FileDown, Library, Loader2,
     MessageSquareMore, Moon, Save, Send, Sparkles, Sun, Wand2, ZoomIn, ZoomOut, RotateCcw,
+    Mic, Trophy, Shield
 } from 'lucide-react';
 
 const API = 'http://localhost:5000';
@@ -324,6 +325,7 @@ const MermaidViewer = ({ code, lightMode }) => {
 
 const AIStudy = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const userId = localStorage.getItem('userId') || '';
     const [theme, setTheme] = useState(localStorage.getItem(THEME_KEY) || 'dark');
     const lightMode = theme === 'light';
@@ -378,6 +380,16 @@ const AIStudy = () => {
     const [modelUsed, setModelUsed] = useState('');
     const [savedBanner, setSavedBanner] = useState('');
 
+    const [xp, setXp] = useState(0);
+    const [xpAnimation, setXpAnimation] = useState('');
+    const [isListening, setIsListening] = useState(false);
+    const [speechError, setSpeechError] = useState('');
+
+    const level = Math.floor(xp / 100) + 1;
+    const xpProgress = xp % 100;
+
+    const [socraticMode, setSocraticMode] = useState(false);
+
     const flashcards = Array.isArray(generated.flashcards) ? generated.flashcards : [];
     const mcq = Array.isArray(generated.mcq) ? generated.mcq : [];
     const fillBlanks = Array.isArray(generated.fill_blanks) ? generated.fill_blanks : [];
@@ -414,9 +426,10 @@ const AIStudy = () => {
             setError('User session not found. Please log in again.');
             return;
         }
-        const [libraryResult, statsResult] = await Promise.allSettled([
+        const [libraryResult, statsResult, xpResult] = await Promise.allSettled([
             axios.get(`${API}/api/ai/library/${userId}`),
             axios.get(`${API}/api/ai/dashboard/${userId}`),
+            axios.get(`${API}/api/user/${userId}/xp`)
         ]);
 
         if (libraryResult.status === 'fulfilled') {
@@ -430,6 +443,10 @@ const AIStudy = () => {
             setStats(statsResult.value.data.stats || null);
         } else {
             setStats(null);
+        }
+        
+        if (xpResult.status === 'fulfilled') {
+            setXp(xpResult.value.data.xp_points || 0);
         }
     };
 
@@ -504,6 +521,67 @@ const AIStudy = () => {
         init();
     }, []);
 
+    useEffect(() => {
+        if (location.state?.autoPrompt) {
+            setMode('text');
+            setSourceText(location.state.autoPrompt);
+            setTypes({
+                summary: false, flashcards: false, mcq: true, fill_blanks: false,
+                yes_no: false, true_false: false, memory_map: false, wh_questions: false
+            });
+            setCounts(prev => ({ ...prev, mcq: 10 }));
+            setSavedBanner('Adaptive Generation Mode Ready! Click Generate with AI to begin.');
+            window.history.replaceState({}, document.title);
+        }
+    }, [location.state?.autoPrompt]);
+
+    const rewardXp = async (amount = 10) => {
+        if (!userId) return;
+        try {
+            const res = await axios.post(`${API}/api/user/${userId}/xp`, { amount });
+            setXp(res.data.xp_points);
+            setXpAnimation(`+${amount} XP!`);
+            setTimeout(() => setXpAnimation(''), 3000);
+        } catch (err) {
+            console.error('Failed to add XP');
+        }
+    };
+
+    const toggleListen = () => {
+        if (isListening) {
+            setIsListening(false);
+            return;
+        }
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            setSpeechError('Speech recognition not supported in your browser. Use Chrome or Edge.');
+            setTimeout(() => setSpeechError(''), 4000);
+            return;
+        }
+        
+        setIsListening(true);
+        setSpeechError('');
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = language === 'English' ? 'en-US' : (language === 'Hindi' ? 'hi-IN' : 'mr-IN');
+        
+        recognition.onresult = (event) => {
+            const transcript = event.results[0][0].transcript;
+            setChatInput(prev => `${prev} ${transcript}`.trim());
+            setIsListening(false);
+        };
+        
+        recognition.onerror = () => {
+            setSpeechError('Microphone not detected or denied.');
+            setIsListening(false);
+            setTimeout(() => setSpeechError(''), 4000);
+        };
+        
+        recognition.onend = () => setIsListening(false);
+        recognition.start();
+    };
+
     const handleGenerate = async (event) => {
         event.preventDefault();
         setLoading(true);
@@ -562,6 +640,8 @@ const AIStudy = () => {
 
             await loadLibraryAndStats();
             if (materialId) await loadChatHistory(materialId);
+            
+            await rewardXp(20);
         } catch (generateError) {
             setError(generateError.response?.data?.error || generateError.message || 'AI generation failed.');
         } finally {
@@ -623,9 +703,15 @@ const AIStudy = () => {
                 generatedJson: generated,
                 history: chat.slice(-8),
                 language,
+                socraticMode,
             });
 
-            setChat((prev) => [...prev, { role: 'assistant', message: res.data?.answer || '' }]);
+            setChat((prev) => [...prev, { 
+                role: 'assistant', 
+                message: res.data?.answer || '',
+                suggestedFollowups: res.data?.suggestedFollowups || []
+            }]);
+            await rewardXp(5);
         } catch (chatError) {
             setChat((prev) => prev.slice(0, -1));
             setError(chatError.response?.data?.error || 'Tutor chat failed.');
@@ -681,9 +767,26 @@ const AIStudy = () => {
                     <button onClick={() => navigate('/dashboard')} className={`inline-flex items-center gap-2 ${ui.muted}`}>
                         <ArrowLeft size={16} /> Back to Dashboard
                     </button>
-                    <button onClick={() => setTheme(lightMode ? 'dark' : 'light')} className={`p-3 rounded-2xl ${ui.card}`}>
-                        {lightMode ? <Moon size={16} /> : <Sun size={16} />}
-                    </button>
+                    <div className="flex items-center gap-3">
+                        <div className={`relative hidden sm:flex items-center gap-3 px-4 py-2 rounded-2xl ${ui.card}`}>
+                            <div className="flex items-center gap-2 font-bold select-none cursor-default" title="Your current Level">
+                                <Shield className="text-amber-500 fill-amber-500/10" size={18} /> Level {level}
+                            </div>
+                            <div className="w-24 h-2 bg-slate-200/20 rounded-full overflow-hidden relative">
+                                <div className="absolute top-0 left-0 h-full bg-[linear-gradient(90deg,#f59e0b,#fcd34d)] transition-all duration-500" style={{ width: `${xpProgress}%` }}></div>
+                            </div>
+                            <span className="text-xs font-semibold text-amber-500 w-12 text-right">{xp} XP</span>
+                            
+                            {xpAnimation ? (
+                                <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-sm font-black text-amber-500 animate-[bounce_0.5s_ease-out_infinite] whitespace-nowrap drop-shadow-md z-50 pointer-events-none">
+                                    <Trophy size={14} className="inline mr-1 -mt-0.5" />{xpAnimation}
+                                </div>
+                            ) : null}
+                        </div>
+                        <button onClick={() => setTheme(lightMode ? 'dark' : 'light')} className={`p-3 rounded-2xl ${ui.card}`}>
+                            {lightMode ? <Moon size={16} /> : <Sun size={16} />}
+                        </button>
+                    </div>
                 </div>
 
                 <section className={`rounded-[2rem] p-6 md:p-8 ${lightMode ? 'bg-[linear-gradient(120deg,#f59e0b,#fb7185,#60a5fa)] text-slate-950' : 'bg-[linear-gradient(120deg,#0f172a,#1d4ed8,#0f766e)] text-white'}`}>
@@ -975,23 +1078,49 @@ const AIStudy = () => {
 
                 <section className={`rounded-[2rem] p-5 md:p-6 ${ui.card}`}>
                     <div className="flex items-center justify-between gap-3 mb-4">
-                        <h2 className="text-2xl font-bold flex items-center gap-2"><MessageSquareMore size={20} /> Tutor Chat</h2>
-                        <span className={`text-xs px-3 py-1 rounded-full ${ui.badge}`}>
+                        <div className="flex items-center gap-4">
+                            <h2 className="text-2xl font-bold flex items-center gap-2"><MessageSquareMore size={20} /> Tutor Chat</h2>
+                            <label className={`hidden md:flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${socraticMode ? (lightMode ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30') : (lightMode ? 'bg-slate-100 text-slate-500 border-slate-200' : 'bg-white/5 text-neutral-400 border-white/10')}`}>
+                                <input type="checkbox" className="hidden" checked={socraticMode} onChange={(e) => setSocraticMode(e.target.checked)} />
+                                <BrainCircuit size={14} /> Socratic Mode
+                            </label>
+                        </div>
+                        <span className={`hidden md:inline-flex text-xs px-3 py-1 rounded-full ${ui.badge}`}>
                             {activeId ? 'Saved chat history on' : 'Temporary chat mode'}
                         </span>
                     </div>
-                    <div className="space-y-2 max-h-[320px] overflow-y-auto mb-4">
+                    
+                    <label className={`md:hidden flex mb-4 items-center gap-2 text-xs font-bold w-max px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${socraticMode ? (lightMode ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30') : (lightMode ? 'bg-slate-100 text-slate-500 border-slate-200' : 'bg-white/5 text-neutral-400 border-white/10')}`}>
+                         <input type="checkbox" className="hidden" checked={socraticMode} onChange={(e) => setSocraticMode(e.target.checked)} />
+                         <BrainCircuit size={14} /> Socratic Mode
+                    </label>
+
+                    <div className="space-y-4 max-h-[400px] overflow-y-auto mb-4 px-1">
                         {chat.map((item, index) => (
-                            <div key={index} className={`rounded-3xl p-4 border ${item.role === 'user' ? (lightMode ? 'ml-8 bg-sky-50 border-sky-200' : 'ml-8 bg-sky-500/10 border-sky-400/20') : (lightMode ? 'mr-8 bg-slate-50 border-slate-200' : 'mr-8 bg-white/5 border-white/10')}`}>
-                                <p className={`text-xs mb-1 ${ui.muted}`}>{item.role === 'user' ? 'You' : 'Tutor'}</p>
-                                <p className="whitespace-pre-wrap text-sm">{item.message}</p>
+                            <div key={index} className={`rounded-[2rem] p-5 border ${item.role === 'user' ? (lightMode ? 'ml-8 bg-sky-50 border-sky-200' : 'ml-8 bg-[linear-gradient(120deg,rgba(14,165,233,0.1),rgba(56,189,248,0.05))] border-sky-400/20') : (lightMode ? 'mr-8 bg-white border-slate-200 shadow-sm' : 'mr-8 bg-white/5 border-white/10')}`}>
+                                <p className={`text-xs uppercase tracking-widest font-bold mb-2 ${ui.muted}`}>{item.role === 'user' ? 'You' : 'Tutor'}</p>
+                                <p className="whitespace-pre-wrap text-[15px] leading-relaxed">{item.message}</p>
+                                
+                                {item.suggestedFollowups?.length ? (
+                                    <div className="mt-4 flex flex-wrap gap-2">
+                                        {item.suggestedFollowups.map((fup, i) => (
+                                            <button key={i} onClick={() => setChatInput(fup)} className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all hover:-translate-y-0.5 shadow-sm hover:shadow-md ${lightMode ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50' : 'bg-black/20 border-white/20 text-white hover:bg-white/10'}`}>
+                                                {fup}
+                                            </button>
+                                        ))}
+                                    </div>
+                                ) : null}
                             </div>
                         ))}
                         {!chat.length ? <p className={ui.muted}>Ask questions about the current material. If the material is saved, chat history is also stored.</p> : null}
                     </div>
-                    <div className="flex gap-2">
-                        <input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); sendChat(); } }} placeholder="Ask a question about this material..." className={`flex-1 rounded-2xl px-4 py-3 ${ui.input}`} />
-                        <button onClick={sendChat} disabled={chatLoading || !hasGeneratedData} className="rounded-2xl px-4 py-3 bg-[linear-gradient(120deg,#06b6d4,#2563eb)] text-white disabled:opacity-40">
+                    {speechError ? <div className={`text-xs p-2 mb-2 rounded-lg ${lightMode ? 'bg-red-50 text-red-600' : 'bg-red-500/10 text-red-400'}`}>{speechError}</div> : null}
+                    <div className="flex items-center gap-2">
+                        <button onClick={toggleListen} title="Voice Dictation" className={`p-3 rounded-2xl transition-all duration-300 ${isListening ? 'bg-red-500 text-white animate-[pulse_1.5s_ease-in-out_infinite] shadow-[0_0_15px_rgba(239,68,68,0.6)]' : ui.input}`}>
+                            <Mic size={18} className={isListening ? 'animate-bounce' : ''} />
+                        </button>
+                        <input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); sendChat(); } }} placeholder={isListening ? 'Listening... Speak now' : 'Ask a question about this material...'} className={`flex-1 rounded-2xl px-4 py-3 outline-none ${ui.input} ${isListening ? 'border-red-400 ring-2 ring-red-500/20' : ''}`} />
+                        <button onClick={sendChat} disabled={chatLoading || !hasGeneratedData} className="rounded-2xl px-4 py-3 bg-[linear-gradient(120deg,#06b6d4,#2563eb)] text-white font-bold disabled:opacity-40">
                             {chatLoading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
                         </button>
                     </div>
