@@ -12,3 +12,4 @@ pytesseract
 faster-whisper
 moviepy
 torch
+python-dotenv

@@ -5,8 +5,8 @@ from config import Config
 from prompts import PromptTemplates
 
 # Configure APIs
-if Config.GEMINI_API_KEY:
-    genai.configure(api_key=Config.GEMINI_API_KEY)
+if Config.GEMINI_API_KEY or Config.GOOGLE_API_KEY:
+    genai.configure(api_key=Config.GEMINI_API_KEY or Config.GOOGLE_API_KEY)
 
 if Config.OPENAI_API_KEY:
     openai.api_key = Config.OPENAI_API_KEY
