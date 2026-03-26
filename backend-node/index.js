@@ -116,7 +116,7 @@ app.post('/api/ai/process', upload.single('file'), async (req, res) => {
 
         const aiResponse = await axios.post(`${pythonServiceUrl}/process-file`, payload, {
             headers: payload.getHeaders(),
-            timeout: 120000,
+            timeout: 600000,
         });
 
         const generatedData = aiResponse.data?.data || {};

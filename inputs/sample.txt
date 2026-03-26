@@ -1,0 +1,25 @@
+Once upon a time, in the **Kingdom of OOP**, there lived a wise king named **Encap**, who ruled over four great provinces — **Encapsulation**, **Inheritance**, **Polymorphism**, and **Abstraction**. Each province had its own way of keeping the kingdom organized and efficient.
+
+### The Tale of the Four Provinces
+
+**1. Encapsulation — The Safe Treasure Chest**
+King Encap was known for keeping his royal treasures locked safely inside strong chests. Only trusted guards had the keys.
+This represented *Encapsulation*: keeping important data private and safe, and allowing access only through special gates (methods). The guards controlled what could be seen or changed — just like data hiding in programming.
+
+**2. Inheritance — The Royal Legacy**
+Prince Inher was the king’s son. He didn’t have to learn everything from scratch — he inherited the king’s wisdom, power, and resources.
+This is *Inheritance*: when one class (child) inherits the properties and behavior of another (parent). It saves time and effort, passing on what’s already built.
+
+**3. Polymorphism — The Shape-Shifter Knights**
+In the kingdom, there were magical knights who could take many forms — a healer in peace, a warrior in war, or a teacher in schools.
+This was *Polymorphism*: one name, many forms. The same “knight” (function or method) behaved differently depending on the situation — just as methods can act differently in subclasses.
+
+**4. Abstraction — The Royal Messenger**
+Finally, there was the Royal Messenger who told the people only what they needed to know — “The king will visit tomorrow.” He never revealed the secret royal plans or routes.
+This is *Abstraction*: showing only essential details and hiding complex inner workings, making life simpler for everyone.
+
+### The Moral of the Kingdom
+
+Because of these four principles, the **Kingdom of OOP** became strong, organized, and easy to manage — just like a well-designed program. Each part had its role, and together they created harmony between structure and simplicity.
+
+**Moral:** In Object-Oriented Programming, each concept — Encapsulation, Inheritance, Polymorphism, and Abstraction — works together like parts of a well-run kingdom to make code secure, reusable, flexible, and easy to understand.

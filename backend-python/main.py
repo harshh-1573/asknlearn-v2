@@ -25,10 +25,7 @@ try:
 except Exception:
     WhisperModel = None
 
-try:
-    import moviepy.editor as mp
-except Exception:
-    mp = None
+# moviepy is no longer needed since faster-whisper supports video formats natively
 
 load_dotenv()
 
@@ -141,37 +138,25 @@ def _load_transcription_model():
             device = "cpu"
             compute_type = "int8"
 
-    return WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type)
+    import gc
+    try:
+        model = WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type)
+        return model
+    except Exception:
+        # Fallback to CPU if CUDA initialization fails (e.g. missing cudnn/dll issues)
+        gc.collect()
+        if torch is not None and hasattr(torch.cuda, "empty_cache"):
+            torch.cuda.empty_cache()
+        return WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
 
 
 def _transcribe_media_file(path: str, extension: str) -> str:
-    audio_path = path
-    temp_audio_path = None
-    clip = None
-
     try:
-        if extension in VIDEO_EXTENSIONS:
-            if mp is None:
-                raise RuntimeError(
-                    "moviepy is not installed. Install moviepy and ffmpeg to enable video transcription."
-                )
-            temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-            temp_audio_path = temp_audio.name
-            temp_audio.close()
-
-            clip = mp.VideoFileClip(path)
-            try:
-                if clip.audio is None:
-                    raise RuntimeError("The uploaded video does not contain an audio track.")
-                clip.audio.write_audiofile(temp_audio_path, codec="mp3", logger=None)
-            finally:
-                if clip:
-                    clip.close()
-            audio_path = temp_audio_path
-
         model = _load_transcription_model()
-        segments, info = model.transcribe(audio_path, beam_size=5, vad_filter=True)
+        # faster-whisper uses PyAV which natively supports parsing video files (like MP4) and extracting their audio automatically. No need for moviepy.
+        segments, info = model.transcribe(path, beam_size=5, vad_filter=True)
         transcript = " ".join(segment.text.strip() for segment in segments if segment.text and segment.text.strip()).strip()
+        
         if not transcript:
             raise RuntimeError("No speech could be transcribed from the uploaded media.")
 
@@ -181,21 +166,9 @@ def _transcribe_media_file(path: str, extension: str) -> str:
         return transcript
     except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error))
-    except HTTPException:
-        raise
     except Exception as error:
+        # Catch unexpected CUDA out-of-memory or PyAV decoding errors
         raise HTTPException(status_code=400, detail=f"Failed to transcribe media: {error}")
-    finally:
-        if clip is not None:
-            try:
-                clip.close()
-            except Exception:
-                pass
-        if temp_audio_path and os.path.exists(temp_audio_path):
-            try:
-                os.remove(temp_audio_path)
-            except OSError:
-                pass
 
 
 def _extract_text_from_upload(file: UploadFile, file_bytes: bytes) -> str:
@@ -210,19 +183,35 @@ def _extract_text_from_upload(file: UploadFile, file_bytes: bytes) -> str:
         if extension == ".pdf":
             return _extract_text_from_pdf(file_bytes)
 
+        if extension in AUDIO_EXTENSIONS or extension in VIDEO_EXTENSIONS:
+            return _transcribe_media_file(tmp_path, extension)
+
         if extension in DOCUMENT_EXTENSIONS or extension in IMAGE_EXTENSIONS:
             extracted = read_file(tmp_path, extension)
             if extracted:
                 return extracted
-
-        if extension in AUDIO_EXTENSIONS or extension in VIDEO_EXTENSIONS:
-            return _transcribe_media_file(tmp_path, extension)
 
         if extension in {".doc"}:
             raise HTTPException(
                 status_code=400,
                 detail="Legacy .doc files are not directly readable here. Please convert to .docx or PDF.",
             )
+            
+        # UNIVERSAL INPUT FALLBACK: 
+        # Attempt standard file read for unknown extensions, parsing as plain text.
+        extracted = read_file(tmp_path, ".txt")
+        if extracted and len(extracted.strip()) > 5:
+            return extracted
+            
+        # Final universal binary-to-text string extraction for any fully unrecognised format
+        import string
+        import re
+        printable = set(string.printable.encode("ascii"))
+        chars = [chr(b) if b in printable else " " for b in file_bytes]
+        text = re.sub(r'\s+', ' ', "".join(chars)).strip()
+        if len(text) > 10:
+            return text
+            
     finally:
         try:
             os.remove(tmp_path)
@@ -230,6 +219,7 @@ def _extract_text_from_upload(file: UploadFile, file_bytes: bytes) -> str:
             pass
 
     try:
+        # Ultimate fallback
         return file_bytes.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail=UNIVERSAL_INPUT_MESSAGE)

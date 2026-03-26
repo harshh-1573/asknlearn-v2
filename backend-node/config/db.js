@@ -9,7 +9,7 @@ const sequelize = new Sequelize(
     {
         host: process.env.DB_HOST,
         dialect: 'mysql',
-        logging: console.log // Set to console.log temporarily to see the SQL in terminal!
+        logging: false // Disabled SQL logs for cleaner terminal
     }
 );
 
