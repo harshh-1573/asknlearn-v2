@@ -31,6 +31,7 @@ venv/
 backend-node/uploads/
 backend-node/logs/
 backend-python/temp_uploads/
+backend-node/scripts/*_dump.txt
 
 # ======================
 # OS FILES

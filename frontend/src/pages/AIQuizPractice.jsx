@@ -7,14 +7,14 @@ const ACTIVE_KEY = 'asknlearn_active_material';
 const readActiveMaterial = () => {
     try {
         return JSON.parse(sessionStorage.getItem(ACTIVE_KEY) || '{}');
-    } catch (_error) {
+    } catch {
         return {};
     }
 };
 
 const AIQuizPractice = () => {
     const navigate = useNavigate();
-    const material = useMemo(readActiveMaterial, []);
+    const material = useMemo(() => readActiveMaterial(), []);
     const questions = Array.isArray(material?.data?.mcq) ? material.data.mcq : [];
 
     const [started, setStarted] = useState(false);

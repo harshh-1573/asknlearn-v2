@@ -55,7 +55,15 @@ const QuizPage = () => {
     useEffect(() => {
         const fetchQuestions = async () => {
             try {
-                const res = await axios.get(`http://localhost:5000/api/questions/${subjectId}?limit=${limit}`);
+                let url;
+                if (subjectId === 'adaptive') {
+                    const uId = localStorage.getItem('userId') || '0';
+                    url = `http://localhost:5000/api/questions/adaptive/${uId}`;
+                } else {
+                    url = `http://localhost:5000/api/questions/${subjectId}?limit=${limit}`;
+                }
+
+                const res = await axios.get(url);
                 const nextQuestions = Array.isArray(res.data) ? res.data : [];
                 setQuestions(nextQuestions);
 
@@ -111,7 +119,7 @@ const QuizPage = () => {
         setSelectedAnswers({
             ...selectedAnswers,
             [currentIdx]: {
-                question_id: currentQ.question_id,
+                question_id: currentQ.question_id || currentQ.id || 0,
                 selected_option: optionKey.toUpperCase(),
                 selected_value: currentQ[`option_${optionKey}`],
                 is_correct: isCorrect,
@@ -130,11 +138,14 @@ const QuizPage = () => {
 
             if (!resultsArray.length) return;
 
+            const safeSubjectId = subjectId === 'adaptive' ? 0 : subjectId;
+
             await axios.post('http://localhost:5000/api/submit-quiz', {
                 userId,
-                subjectId,
+                subjectId: safeSubjectId,
                 quizSessionId,
                 results: resultsArray,
+                mode: state?.mode || 'normal'
             });
         } catch (err) {
             console.error('Failed to save scorecard:', err);

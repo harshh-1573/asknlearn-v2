@@ -1,327 +1,22 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import {
-    ArrowLeft, Bot, BrainCircuit, Boxes, Check, ChevronDown, ChevronUp, FileDown, Library, Loader2,
-    MessageSquareMore, Moon, Save, Send, Sparkles, Sun, Wand2, ZoomIn, ZoomOut, RotateCcw,
-    Mic, Trophy, Shield
+    ArrowLeft, BrainCircuit, Check, Loader2,
+    Moon, Sun, Wand2,
+    Trophy, Shield
 } from 'lucide-react';
+import {
+    TYPE_LABELS,
+    resolveStoredData,
+} from '../components/ai-study/constants';
+import GeneratedSections from '../components/ai-study/GeneratedSections';
+import TutorChatPanel from '../components/ai-study/TutorChatPanel';
+import LibraryPanel from '../components/ai-study/LibraryPanel';
 
 const API = 'http://localhost:5000';
 const ACTIVE_KEY = 'asknlearn_active_material';
 const THEME_KEY = 'asknlearn_theme';
-
-const TYPE_LABELS = {
-    summary: 'Summary',
-    flashcards: 'Flashcards',
-    mcq: 'MCQ',
-    fill_blanks: 'Fill Blanks',
-    yes_no: 'Yes / No',
-    true_false: 'True / False',
-    memory_map: 'Mind Map',
-    wh_questions: 'WH Questions',
-};
-
-const SECTION_STYLES = {
-    summary: 'from-amber-400/20 to-orange-500/20',
-    flashcards: 'from-sky-400/20 to-cyan-500/20',
-    mcq: 'from-emerald-400/20 to-teal-500/20',
-    fill_blanks: 'from-pink-400/20 to-rose-500/20',
-    yes_no: 'from-violet-400/20 to-fuchsia-500/20',
-    true_false: 'from-indigo-400/20 to-blue-500/20',
-    wh_questions: 'from-lime-400/20 to-emerald-500/20',
-    memory_map: 'from-yellow-400/20 to-amber-500/20',
-};
-
-const safeParse = (value, fallback) => {
-    let current = value;
-    for (let index = 0; index < 3; index += 1) {
-        try {
-            if (typeof current === 'string') {
-                const trimmed = current.trim();
-                if (!trimmed) return fallback;
-                current = JSON.parse(trimmed);
-                continue;
-            }
-            return current ?? fallback;
-        } catch (_error) {
-            if (typeof current === 'string') {
-                const repaired = current
-                    .trim()
-                    .replace(/([{,]\s*)'([^']+?)'\s*:/g, '$1"$2":')
-                    .replace(/:\s*'([^']*?)'/g, ': "$1"');
-                if (repaired !== current) {
-                    current = repaired;
-                    continue;
-                }
-            }
-            return fallback;
-        }
-    }
-    return fallback;
-};
-
-const resolveStoredData = (item = {}) => {
-    const direct = safeParse(item.content_json, null);
-    if (direct && typeof direct === 'object' && Object.keys(direct).length) {
-        return direct;
-    }
-
-    const fallback = safeParse(item.content, null);
-    if (fallback && typeof fallback === 'object' && Object.keys(fallback).length) {
-        return fallback;
-    }
-
-    if (typeof item.content === 'string' && item.content.trim()) {
-        return { summary: item.content.trim() };
-    }
-
-    return {};
-};
-
-const stripMermaid = (value = '') => String(value).replace(/```mermaid/gi, '').replace(/```/g, '').trim();
-
-const normalizeMermaidLabel = (value = '') => String(value)
-    .replace(/[{}[\]]/g, ' ')
-    .replace(/[:;]+/g, ' - ')
-    .replace(/[<>`]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-const sanitizeMindMap = (value = '') => {
-    const raw = stripMermaid(value).replace(/\r/g, '').replace(/\t/g, '    ').trim();
-    if (!raw) return '';
-
-    const lines = raw.split('\n').map((line) => line.replace(/\u00a0/g, ' ').trimEnd());
-    const children = [];
-    let rootLabel = 'Study Topic';
-
-    lines.forEach((line, index) => {
-        const trimmed = line.trim();
-        if (!trimmed) return;
-
-        if (index === 0 && trimmed.startsWith('mindmap')) {
-            return;
-        }
-
-        const normalized = normalizeMermaidLabel(trimmed
-            .replace(/^[-*+]\s+/, '')
-            .replace(/^\d+[\.)]\s+/, '')
-            .replace(/^\#+\s+/, '')
-            .replace(/^root\s*[:\-]?\s*/i, '')
-            .replace(/\s+/g, ' ')
-            .trim());
-
-        if (!normalized) return;
-        if (/^\(\(.*\)\)$/.test(normalized)) {
-            rootLabel = normalized.replace(/^\(\(/, '').replace(/\)\)$/, '').trim() || rootLabel;
-            return;
-        }
-        if (/^root\s*\(\(/i.test(trimmed) || /^root\s*\[/i.test(trimmed) || /^root\s*$/i.test(trimmed)) {
-            rootLabel = normalized || rootLabel;
-            return;
-        }
-        children.push(normalized.replace(/"/g, '\\"'));
-    });
-
-    const output = ['mindmap', `  root((${rootLabel.replace(/"/g, '\\"')}))`];
-    children.forEach((child, index) => {
-        output.push(`    node${index + 1}["${child}"]`);
-    });
-    if (!children.length) {
-        output.push('    node1["Key Ideas"]');
-    }
-    return output.join('\n');
-};
-
-const getHintText = (answer = '') => {
-    const normalized = String(answer || '').trim();
-    if (!normalized) return 'No hint available.';
-
-    const words = normalized.split(/\s+/).filter(Boolean);
-    if (words.length > 1) {
-        return `Initial letters: ${words.map((word) => word[0]?.toUpperCase() || '').join(' ')} - ${words.length} words`;
-    }
-
-    return `Starts with "${normalized[0]?.toUpperCase() || ''}" - ${normalized.length} letters`;
-};
-
-const getItemCount = (data = {}) => {
-    const arrays = ['flashcards', 'mcq', 'fill_blanks', 'yes_no', 'true_false', 'wh_questions'];
-    let total = data.summary ? 1 : 0;
-    arrays.forEach((key) => {
-        if (Array.isArray(data[key])) total += data[key].length;
-    });
-    if (data.memory_map) total += 1;
-    return total;
-};
-
-const MermaidViewer = ({ code, lightMode }) => {
-    const [svg, setSvg] = useState('');
-    const [error, setError] = useState('');
-    const [zoom, setZoom] = useState(1.15);
-    const containerRef = useRef(null);
-    const panZoomRef = useRef(null);
-
-    useEffect(() => {
-        let mounted = true;
-        const render = async () => {
-            if (!code) return;
-            try {
-                if (!window.mermaid) {
-                    await new Promise((resolve, reject) => {
-                        const existing = document.getElementById('mermaid-script');
-                        if (existing) {
-                            if (window.mermaid) return resolve();
-                            existing.addEventListener('load', resolve, { once: true });
-                            existing.addEventListener('error', reject, { once: true });
-                            return;
-                        }
-                        const script = document.createElement('script');
-                        script.id = 'mermaid-script';
-                        script.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
-                        script.onload = resolve;
-                        script.onerror = reject;
-                        document.body.appendChild(script);
-                    });
-                }
-
-                if (!window.svgPanZoom) {
-                    await new Promise((resolve, reject) => {
-                        const existing = document.getElementById('svg-pan-zoom-script');
-                        if (existing) {
-                            if (window.svgPanZoom) return resolve();
-                            existing.addEventListener('load', resolve, { once: true });
-                            existing.addEventListener('error', reject, { once: true });
-                            return;
-                        }
-                        const script = document.createElement('script');
-                        script.id = 'svg-pan-zoom-script';
-                        script.src = 'https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js';
-                        script.onload = resolve;
-                        script.onerror = reject;
-                        document.body.appendChild(script);
-                    });
-                }
-
-                window.mermaid.initialize({
-                    startOnLoad: false,
-                    securityLevel: 'loose',
-                    theme: lightMode ? 'default' : 'dark',
-                });
-
-                const diagram = sanitizeMindMap(code);
-                const result = await window.mermaid.render(`mindmap-${Date.now()}`, diagram);
-                if (mounted) {
-                    setSvg(result.svg);
-                    setError('');
-                }
-            } catch (_error) {
-                if (mounted) {
-                    setSvg('');
-                    setError(_error?.message || 'Mind map rendering failed.');
-                }
-            }
-        };
-
-        render();
-        return () => {
-            mounted = false;
-        };
-    }, [code, lightMode]);
-
-    useEffect(() => {
-        if (!svg || !containerRef.current || !window.svgPanZoom) return undefined;
-
-        const timer = window.setTimeout(() => {
-            const svgElement = containerRef.current?.querySelector('svg');
-            if (!svgElement) return;
-
-            if (panZoomRef.current) {
-                try {
-                    panZoomRef.current.destroy();
-                } catch (_error) {
-                    // no-op
-                }
-            }
-
-            panZoomRef.current = window.svgPanZoom(svgElement, {
-                zoomEnabled: true,
-                controlIconsEnabled: false,
-                fit: true,
-                center: true,
-                minZoom: 0.5,
-                maxZoom: 5,
-            });
-        }, 120);
-
-        return () => {
-            window.clearTimeout(timer);
-            if (panZoomRef.current) {
-                try {
-                    panZoomRef.current.destroy();
-                } catch (_error) {
-                    // no-op
-                }
-                panZoomRef.current = null;
-            }
-        };
-    }, [svg]);
-
-    const zoomOut = () => {
-        if (panZoomRef.current) {
-            panZoomRef.current.zoomOut();
-            return;
-        }
-        setZoom((value) => Math.max(0.5, value - 0.15));
-    };
-
-    const zoomIn = () => {
-        if (panZoomRef.current) {
-            panZoomRef.current.zoomIn();
-            return;
-        }
-        setZoom((value) => Math.min(3, value + 0.15));
-    };
-
-    const resetZoom = () => {
-        if (panZoomRef.current) {
-            panZoomRef.current.resetZoom();
-            panZoomRef.current.fit();
-            panZoomRef.current.center();
-            return;
-        }
-        setZoom(1.15);
-    };
-
-    return (
-        <div className={`rounded-3xl border overflow-hidden ${lightMode ? 'bg-white border-slate-200' : 'bg-[#0f172a] border-white/10'}`}>
-            <div className={`flex justify-end gap-2 p-3 border-b ${lightMode ? 'border-slate-200' : 'border-white/10'}`}>
-                <button onClick={zoomOut} className={`p-2 rounded-xl ${lightMode ? 'bg-slate-100' : 'bg-white/10'}`}><ZoomOut size={15} /></button>
-                <button onClick={zoomIn} className={`p-2 rounded-xl ${lightMode ? 'bg-slate-100' : 'bg-white/10'}`}><ZoomIn size={15} /></button>
-                <button onClick={resetZoom} className={`p-2 rounded-xl ${lightMode ? 'bg-slate-100' : 'bg-white/10'}`}><RotateCcw size={15} /></button>
-            </div>
-            <div className="overflow-auto min-h-[420px] md:min-h-[560px] max-h-[75vh] p-4">
-                {svg ? (
-                    <div
-                        ref={containerRef}
-                        style={{ transform: panZoomRef.current ? 'scale(1)' : `scale(${zoom})`, transformOrigin: 'top left', width: 'max-content' }}
-                        dangerouslySetInnerHTML={{ __html: svg }}
-                    />
-                ) : (
-                    <div className="space-y-3">
-                        <div className={`text-sm ${lightMode ? 'text-slate-500' : 'text-neutral-400'}`}>{error || 'Rendering mind map...'}</div>
-                        {code ? (
-                            <pre className={`rounded-2xl p-4 text-xs overflow-auto max-h-[22rem] whitespace-pre-wrap ${lightMode ? 'bg-slate-50 text-slate-700 border border-slate-200' : 'bg-black/20 text-neutral-200 border border-white/10'}`}>
-                                {sanitizeMindMap(code)}
-                            </pre>
-                        ) : null}
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-};
 
 const AIStudy = () => {
     const navigate = useNavigate();
@@ -444,7 +139,7 @@ const AIStudy = () => {
         } else {
             setStats(null);
         }
-        
+
         if (xpResult.status === 'fulfilled') {
             setXp(xpResult.value.data.xp_points || 0);
         }
@@ -463,7 +158,7 @@ const AIStudy = () => {
                 role: entry.role,
                 message: entry.message,
             })));
-        } catch (_error) {
+        } catch {
             setChat([]);
         }
     };
@@ -513,6 +208,22 @@ const AIStudy = () => {
         const init = async () => {
             try {
                 await loadLibraryAndStats();
+
+                // Attempt to load active material from Dashboard redirect
+                const activeVal = sessionStorage.getItem(ACTIVE_KEY);
+                if (activeVal) {
+                    sessionStorage.removeItem(ACTIVE_KEY);
+                    try {
+                        const parsed = JSON.parse(activeVal);
+                        if (parsed && typeof parsed === 'object' && parsed.id) {
+                            openMaterial(parsed);
+                        } else {
+                            openMaterial({ id: activeVal });
+                        }
+                    } catch {
+                        openMaterial({ id: activeVal });
+                    }
+                }
             } catch (initError) {
                 setError(initError.response?.data?.error || 'Failed to load AskNLearn.');
             }
@@ -542,7 +253,7 @@ const AIStudy = () => {
             setXp(res.data.xp_points);
             setXpAnimation(`+${amount} XP!`);
             setTimeout(() => setXpAnimation(''), 3000);
-        } catch (err) {
+        } catch {
             console.error('Failed to add XP');
         }
     };
@@ -558,28 +269,39 @@ const AIStudy = () => {
             setTimeout(() => setSpeechError(''), 4000);
             return;
         }
-        
+
         setIsListening(true);
         setSpeechError('');
         const recognition = new SpeechRecognition();
         recognition.continuous = false;
         recognition.interimResults = false;
         recognition.lang = language === 'English' ? 'en-US' : (language === 'Hindi' ? 'hi-IN' : 'mr-IN');
-        
+
         recognition.onresult = (event) => {
             const transcript = event.results[0][0].transcript;
             setChatInput(prev => `${prev} ${transcript}`.trim());
             setIsListening(false);
         };
-        
+
         recognition.onerror = () => {
             setSpeechError('Microphone not detected or denied.');
             setIsListening(false);
             setTimeout(() => setSpeechError(''), 4000);
         };
-        
+
         recognition.onend = () => setIsListening(false);
         recognition.start();
+    };
+
+    const handleSpeak = (text) => {
+        if (!('speechSynthesis' in window)) {
+            alert('Your browser does not support the Web Speech API.');
+            return;
+        }
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 0.9;
+        window.speechSynthesis.speak(utterance);
     };
 
     const handleGenerate = async (event) => {
@@ -640,7 +362,7 @@ const AIStudy = () => {
 
             await loadLibraryAndStats();
             if (materialId) await loadChatHistory(materialId);
-            
+
             await rewardXp(20);
         } catch (generateError) {
             setError(generateError.response?.data?.error || generateError.message || 'AI generation failed.');
@@ -706,8 +428,8 @@ const AIStudy = () => {
                 socraticMode,
             });
 
-            setChat((prev) => [...prev, { 
-                role: 'assistant', 
+            setChat((prev) => [...prev, {
+                role: 'assistant',
                 message: res.data?.answer || '',
                 suggestedFollowups: res.data?.suggestedFollowups || []
             }]);
@@ -776,7 +498,7 @@ const AIStudy = () => {
                                 <div className="absolute top-0 left-0 h-full bg-[linear-gradient(90deg,#f59e0b,#fcd34d)] transition-all duration-500" style={{ width: `${xpProgress}%` }}></div>
                             </div>
                             <span className="text-xs font-semibold text-amber-500 w-12 text-right">{xp} XP</span>
-                            
+
                             {xpAnimation ? (
                                 <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-sm font-black text-amber-500 animate-[bounce_0.5s_ease-out_infinite] whitespace-nowrap drop-shadow-md z-50 pointer-events-none">
                                     <Trophy size={14} className="inline mr-1 -mt-0.5" />{xpAnimation}
@@ -886,291 +608,70 @@ const AIStudy = () => {
                     </form>
                 </section>
 
-                <section className={`rounded-[2rem] p-5 md:p-6 ${ui.card}`}>
-                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                        <div>
-                            <h2 className="text-2xl font-bold flex items-center gap-2"><Sparkles size={20} /> Generated Study Materials</h2>
-                            {activeName ? <p className={`mt-1 text-sm ${ui.muted}`}>Active material: {activeName}</p> : null}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                            <button onClick={saveToLibrary} disabled={!hasGeneratedData || saveLoading || Boolean(activeId)} className="rounded-2xl px-4 py-3 bg-[linear-gradient(120deg,#7c3aed,#2563eb)] text-white font-semibold disabled:opacity-40 inline-flex items-center gap-2"><Save size={15} /> {activeId ? 'Saved' : (saveLoading ? 'Saving...' : 'Save')}</button>
-                            <button onClick={exportPdf} disabled={!hasGeneratedData} className="rounded-2xl px-4 py-3 bg-[linear-gradient(120deg,#10b981,#14b8a6)] text-white font-semibold disabled:opacity-40 inline-flex items-center gap-2"><FileDown size={15} /> Export PDF</button>
-                        </div>
-                    </div>
+                <GeneratedSections
+                    ui={ui}
+                    lightMode={lightMode}
+                    activeName={activeName}
+                    saveToLibrary={saveToLibrary}
+                    hasGeneratedData={hasGeneratedData}
+                    saveLoading={saveLoading}
+                    activeId={activeId}
+                    exportPdf={exportPdf}
+                    generated={generated}
+                    flashcards={flashcards}
+                    flashcardFlip={flashcardFlip}
+                    setFlashcardFlip={setFlashcardFlip}
+                    handleSpeak={handleSpeak}
+                    contentScrollClass={contentScrollClass}
+                    mcq={mcq}
+                    mcqFeedback={mcqFeedback}
+                    setMcqFeedback={setMcqFeedback}
+                    fillBlanks={fillBlanks}
+                    fillFeedback={fillFeedback}
+                    setFillFeedback={setFillFeedback}
+                    fillHints={fillHints}
+                    setFillHints={setFillHints}
+                    guessInputs={guessInputs}
+                    renderQuestionInput={renderQuestionInput}
+                    trueFalse={trueFalse}
+                    tfFeedback={tfFeedback}
+                    setTfFeedback={setTfFeedback}
+                    yesNo={yesNo}
+                    ynFeedback={ynFeedback}
+                    setYnFeedback={setYnFeedback}
+                    whQuestions={whQuestions}
+                    whReveal={whReveal}
+                    setWhReveal={setWhReveal}
+                />
 
-                    <div className="mt-6 space-y-5">
-                        {generated.summary ? <section className={`rounded-[1.5rem] border p-5 bg-gradient-to-br ${SECTION_STYLES.summary} ${lightMode ? 'border-amber-200' : 'border-white/10'}`}><h3 className="text-xl font-bold mb-3">Summary (1)</h3><div className={contentScrollClass}><p className="leading-7 whitespace-pre-wrap">{generated.summary}</p></div></section> : null}
+                <TutorChatPanel
+                    ui={ui}
+                    lightMode={lightMode}
+                    socraticMode={socraticMode}
+                    setSocraticMode={setSocraticMode}
+                    activeId={activeId}
+                    chat={chat}
+                    setChatInput={setChatInput}
+                    speechError={speechError}
+                    toggleListen={toggleListen}
+                    isListening={isListening}
+                    chatInput={chatInput}
+                    sendChat={sendChat}
+                    chatLoading={chatLoading}
+                    hasGeneratedData={hasGeneratedData}
+                />
 
-                        {flashcards.length ? (
-                            <section className={`rounded-[1.5rem] border p-5 bg-gradient-to-br ${SECTION_STYLES.flashcards} ${lightMode ? 'border-sky-200' : 'border-white/10'}`}>
-                                <h3 className="text-xl font-bold mb-3">Flashcards ({flashcards.length})</h3>
-                                <div className={`${contentScrollClass} grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3`}>
-                                    {flashcards.map((item, index) => (
-                                        <div key={index} className="group [perspective:1000px]">
-                                            <div
-                                                className="relative min-h-[180px] transition-transform duration-500 [transform-style:preserve-3d]"
-                                                onMouseEnter={() => setFlashcardFlip((prev) => ({ ...prev, [index]: true }))}
-                                                onMouseLeave={() => setFlashcardFlip((prev) => ({ ...prev, [index]: false }))}
-                                                style={{ transform: flashcardFlip[index] ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
-                                            >
-                                                <div className={`absolute inset-0 rounded-2xl p-4 [backface-visibility:hidden] ${ui.card}`}>
-                                                    <p className={`text-xs uppercase tracking-[0.2em] mb-2 ${ui.muted}`}>Question</p>
-                                                    <p>{item.q}</p>
-                                                </div>
-                                                <div className={`absolute inset-0 rounded-2xl p-4 [backface-visibility:hidden] [transform:rotateY(180deg)] ${lightMode ? 'bg-cyan-50 border border-cyan-200 text-slate-900' : 'bg-cyan-500/10 border border-cyan-400/20 text-white'}`}>
-                                                    <p className={`text-xs uppercase tracking-[0.2em] mb-2 ${ui.muted}`}>Answer</p>
-                                                    <p>{item.a}</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </section>
-                        ) : null}
-
-                        {mcq.length ? (
-                            <section className={`rounded-[1.5rem] border p-5 bg-gradient-to-br ${SECTION_STYLES.mcq} ${lightMode ? 'border-emerald-200' : 'border-white/10'}`}>
-                                <h3 className="text-xl font-bold mb-3">MCQ ({mcq.length})</h3>
-                                <div className={`${contentScrollClass} space-y-4`}>
-                                    {mcq.map((item, index) => {
-                                        const feedback = mcqFeedback[index];
-                                        return (
-                                            <div key={index} className={`rounded-2xl p-4 ${ui.card}`}>
-                                                <p className="font-semibold mb-3">{index + 1}. {item.question}</p>
-                                                <div className="space-y-2">
-                                                    {['A', 'B', 'C', 'D'].map((optionKey) => item.options?.[optionKey] ? (
-                                                        <button
-                                                            key={optionKey}
-                                                            type="button"
-                                                            onClick={() => setMcqFeedback((prev) => ({
-                                                                ...prev,
-                                                                [index]: {
-                                                                    selected: optionKey,
-                                                                    correct: String(item.correct_option || '').toUpperCase(),
-                                                                    explanation: item.explanation || '',
-                                                                },
-                                                            }))}
-                                                            className={`w-full text-left rounded-2xl px-4 py-3 border ${
-                                                                feedback
-                                                                    ? optionKey === feedback.correct
-                                                                        ? 'border-emerald-400/40 bg-emerald-500/10'
-                                                                        : optionKey === feedback.selected
-                                                                            ? 'border-red-400/40 bg-red-500/10'
-                                                                            : ui.input
-                                                                    : ui.input
-                                                            }`}
-                                                        >
-                                                            <strong>{optionKey}.</strong> {item.options[optionKey]}
-                                                        </button>
-                                                    ) : null)}
-                                                </div>
-                                                {feedback ? (
-                                                    <div className={`mt-3 rounded-2xl p-3 ${feedback.selected === feedback.correct ? (lightMode ? 'bg-emerald-50 text-emerald-700' : 'bg-emerald-500/10 text-emerald-300') : (lightMode ? 'bg-red-50 text-red-700' : 'bg-red-500/10 text-red-300')}`}>
-                                                        <p className="font-semibold">{feedback.selected === feedback.correct ? 'Correct' : `Incorrect. Correct answer: ${feedback.correct}`}</p>
-                                                        {feedback.explanation ? <p className="text-sm mt-1">{feedback.explanation}</p> : null}
-                                                    </div>
-                                                ) : null}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </section>
-                        ) : null}
-
-                        {fillBlanks.length ? (
-                            <section className={`rounded-[1.5rem] border p-5 bg-gradient-to-br ${SECTION_STYLES.fill_blanks} ${lightMode ? 'border-rose-200' : 'border-white/10'}`}>
-                                <h3 className="text-xl font-bold mb-3">Fill Blanks ({fillBlanks.length})</h3>
-                                <div className={`${contentScrollClass} space-y-3`}>
-                                    {fillBlanks.map((item, index) => {
-                                        const feedback = fillFeedback[index];
-                                        const typed = (guessInputs[`fill-${index}`] || '').trim().toLowerCase();
-                                        const correct = String(item.answer || '').trim().toLowerCase();
-                                        return (
-                                            <div key={index} className={`rounded-2xl p-4 ${ui.card}`}>
-                                                <p>{index + 1}. {item.question}</p>
-                                                {renderQuestionInput(`fill-${index}`, 'Type your answer')}
-                                                <div className="mt-3 flex flex-wrap gap-2">
-                                                    <button type="button" onClick={() => setFillFeedback((prev) => ({ ...prev, [index]: { correct: typed === correct, answer: item.answer } }))} className="rounded-2xl px-4 py-2 bg-[linear-gradient(120deg,#ec4899,#f97316)] text-white text-sm font-semibold">
-                                                        Check Answer
-                                                    </button>
-                                                    <button type="button" onClick={() => setFillHints((prev) => ({ ...prev, [index]: !prev[index] }))} className={`rounded-2xl px-4 py-2 text-sm font-semibold ${lightMode ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-white/5 text-amber-200 border border-white/10'}`}>
-                                                        {fillHints[index] ? 'Hide Hint' : 'Show Hint'}
-                                                    </button>
-                                                </div>
-                                                {fillHints[index] ? <div className={`mt-3 rounded-2xl p-3 text-sm ${lightMode ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-amber-500/10 text-amber-200 border border-amber-400/20'}`}>{getHintText(item.answer)}</div> : null}
-                                                {feedback ? <div className={`mt-3 rounded-2xl p-3 ${feedback.correct ? (lightMode ? 'bg-emerald-50 text-emerald-700' : 'bg-emerald-500/10 text-emerald-300') : (lightMode ? 'bg-red-50 text-red-700' : 'bg-red-500/10 text-red-300')}`}>{feedback.correct ? 'Correct' : `Correct answer: ${feedback.answer}`}</div> : null}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </section>
-                        ) : null}
-
-                        {trueFalse.length ? (
-                            <section className={`rounded-[1.5rem] border p-5 bg-gradient-to-br ${SECTION_STYLES.true_false} ${lightMode ? 'border-indigo-200' : 'border-white/10'}`}>
-                                <h3 className="text-xl font-bold mb-3">True / False ({trueFalse.length})</h3>
-                                <div className={`${contentScrollClass} space-y-3`}>
-                                    {trueFalse.map((item, index) => {
-                                        const feedback = tfFeedback[index];
-                                        return (
-                                            <div key={index} className={`rounded-2xl p-4 ${ui.card}`}>
-                                                <p>{index + 1}. {item.question}</p>
-                                                <div className="grid grid-cols-2 gap-2 mt-3">
-                                                    {['True', 'False'].map((choice) => (
-                                                        <button key={choice} type="button" onClick={() => setTfFeedback((prev) => ({ ...prev, [index]: { selected: choice, answer: item.answer } }))} className={`rounded-2xl px-4 py-3 ${ui.input}`}>
-                                                            {choice}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                                {feedback ? <div className={`mt-3 rounded-2xl p-3 ${String(feedback.selected).toLowerCase() === String(feedback.answer).toLowerCase() ? (lightMode ? 'bg-emerald-50 text-emerald-700' : 'bg-emerald-500/10 text-emerald-300') : (lightMode ? 'bg-red-50 text-red-700' : 'bg-red-500/10 text-red-300')}`}>{String(feedback.selected).toLowerCase() === String(feedback.answer).toLowerCase() ? 'Correct' : `Correct answer: ${feedback.answer}`}</div> : null}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </section>
-                        ) : null}
-
-                        {yesNo.length ? (
-                            <section className={`rounded-[1.5rem] border p-5 bg-gradient-to-br ${SECTION_STYLES.yes_no} ${lightMode ? 'border-fuchsia-200' : 'border-white/10'}`}>
-                                <h3 className="text-xl font-bold mb-3">Yes / No ({yesNo.length})</h3>
-                                <div className={`${contentScrollClass} space-y-3`}>
-                                    {yesNo.map((item, index) => {
-                                        const feedback = ynFeedback[index];
-                                        return (
-                                            <div key={index} className={`rounded-2xl p-4 ${ui.card}`}>
-                                                <p>{index + 1}. {item.question}</p>
-                                                <div className="grid grid-cols-2 gap-2 mt-3">
-                                                    {['Yes', 'No'].map((choice) => (
-                                                        <button key={choice} type="button" onClick={() => setYnFeedback((prev) => ({ ...prev, [index]: { selected: choice, answer: item.answer } }))} className={`rounded-2xl px-4 py-3 ${ui.input}`}>
-                                                            {choice}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                                {feedback ? <div className={`mt-3 rounded-2xl p-3 ${String(feedback.selected).toLowerCase() === String(feedback.answer).toLowerCase() ? (lightMode ? 'bg-emerald-50 text-emerald-700' : 'bg-emerald-500/10 text-emerald-300') : (lightMode ? 'bg-red-50 text-red-700' : 'bg-red-500/10 text-red-300')}`}>{String(feedback.selected).toLowerCase() === String(feedback.answer).toLowerCase() ? 'Correct' : `Correct answer: ${feedback.answer}`}</div> : null}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </section>
-                        ) : null}
-
-                        {whQuestions.length ? (
-                            <section className={`rounded-[1.5rem] border p-5 bg-gradient-to-br ${SECTION_STYLES.wh_questions} ${lightMode ? 'border-lime-200' : 'border-white/10'}`}>
-                                <h3 className="text-xl font-bold mb-3">WH Questions ({whQuestions.length})</h3>
-                                <div className={`${contentScrollClass} space-y-3`}>
-                                    {whQuestions.map((item, index) => (
-                                        <div key={index} className={`rounded-2xl p-4 ${ui.card}`}>
-                                            <p>{index + 1}. {item.question}</p>
-                                            {renderQuestionInput(`wh-${index}`, 'Write your response')}
-                                            <button type="button" onClick={() => setWhReveal((prev) => ({ ...prev, [index]: true }))} className="mt-3 rounded-2xl px-4 py-2 bg-[linear-gradient(120deg,#84cc16,#10b981)] text-white text-sm font-semibold">
-                                                Reveal Answer
-                                            </button>
-                                            {whReveal[index] ? <div className={`mt-3 rounded-2xl p-3 ${lightMode ? 'bg-lime-50 text-lime-700' : 'bg-lime-500/10 text-lime-300'}`}>{item.answer}</div> : null}
-                                        </div>
-                                    ))}
-                                </div>
-                            </section>
-                        ) : null}
-
-                        {generated.memory_map ? <section className={`rounded-[1.5rem] border p-5 bg-gradient-to-br ${SECTION_STYLES.memory_map} ${lightMode ? 'border-yellow-200' : 'border-white/10'}`}><h3 className="text-xl font-bold mb-3 flex items-center gap-2"><Boxes size={18} /> Mind Map (1)</h3><MermaidViewer code={generated.memory_map} lightMode={lightMode} /></section> : null}
-                    </div>
-                </section>
-
-                <section className={`rounded-[2rem] p-5 md:p-6 ${ui.card}`}>
-                    <div className="flex items-center justify-between gap-3 mb-4">
-                        <div className="flex items-center gap-4">
-                            <h2 className="text-2xl font-bold flex items-center gap-2"><MessageSquareMore size={20} /> Tutor Chat</h2>
-                            <label className={`hidden md:flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${socraticMode ? (lightMode ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30') : (lightMode ? 'bg-slate-100 text-slate-500 border-slate-200' : 'bg-white/5 text-neutral-400 border-white/10')}`}>
-                                <input type="checkbox" className="hidden" checked={socraticMode} onChange={(e) => setSocraticMode(e.target.checked)} />
-                                <BrainCircuit size={14} /> Socratic Mode
-                            </label>
-                        </div>
-                        <span className={`hidden md:inline-flex text-xs px-3 py-1 rounded-full ${ui.badge}`}>
-                            {activeId ? 'Saved chat history on' : 'Temporary chat mode'}
-                        </span>
-                    </div>
-                    
-                    <label className={`md:hidden flex mb-4 items-center gap-2 text-xs font-bold w-max px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${socraticMode ? (lightMode ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30') : (lightMode ? 'bg-slate-100 text-slate-500 border-slate-200' : 'bg-white/5 text-neutral-400 border-white/10')}`}>
-                         <input type="checkbox" className="hidden" checked={socraticMode} onChange={(e) => setSocraticMode(e.target.checked)} />
-                         <BrainCircuit size={14} /> Socratic Mode
-                    </label>
-
-                    <div className="space-y-4 max-h-[400px] overflow-y-auto mb-4 px-1">
-                        {chat.map((item, index) => (
-                            <div key={index} className={`rounded-[2rem] p-5 border ${item.role === 'user' ? (lightMode ? 'ml-8 bg-sky-50 border-sky-200' : 'ml-8 bg-[linear-gradient(120deg,rgba(14,165,233,0.1),rgba(56,189,248,0.05))] border-sky-400/20') : (lightMode ? 'mr-8 bg-white border-slate-200 shadow-sm' : 'mr-8 bg-white/5 border-white/10')}`}>
-                                <p className={`text-xs uppercase tracking-widest font-bold mb-2 ${ui.muted}`}>{item.role === 'user' ? 'You' : 'Tutor'}</p>
-                                <p className="whitespace-pre-wrap text-[15px] leading-relaxed">{item.message}</p>
-                                
-                                {item.suggestedFollowups?.length ? (
-                                    <div className="mt-4 flex flex-wrap gap-2">
-                                        {item.suggestedFollowups.map((fup, i) => (
-                                            <button key={i} onClick={() => setChatInput(fup)} className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all hover:-translate-y-0.5 shadow-sm hover:shadow-md ${lightMode ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50' : 'bg-black/20 border-white/20 text-white hover:bg-white/10'}`}>
-                                                {fup}
-                                            </button>
-                                        ))}
-                                    </div>
-                                ) : null}
-                            </div>
-                        ))}
-                        {!chat.length ? <p className={ui.muted}>Ask questions about the current material. If the material is saved, chat history is also stored.</p> : null}
-                    </div>
-                    {speechError ? <div className={`text-xs p-2 mb-2 rounded-lg ${lightMode ? 'bg-red-50 text-red-600' : 'bg-red-500/10 text-red-400'}`}>{speechError}</div> : null}
-                    <div className="flex items-center gap-2">
-                        <button onClick={toggleListen} title="Voice Dictation" className={`p-3 rounded-2xl transition-all duration-300 ${isListening ? 'bg-red-500 text-white animate-[pulse_1.5s_ease-in-out_infinite] shadow-[0_0_15px_rgba(239,68,68,0.6)]' : ui.input}`}>
-                            <Mic size={18} className={isListening ? 'animate-bounce' : ''} />
-                        </button>
-                        <input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); sendChat(); } }} placeholder={isListening ? 'Listening... Speak now' : 'Ask a question about this material...'} className={`flex-1 rounded-2xl px-4 py-3 outline-none ${ui.input} ${isListening ? 'border-red-400 ring-2 ring-red-500/20' : ''}`} />
-                        <button onClick={sendChat} disabled={chatLoading || !hasGeneratedData} className="rounded-2xl px-4 py-3 bg-[linear-gradient(120deg,#06b6d4,#2563eb)] text-white font-bold disabled:opacity-40">
-                            {chatLoading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                        </button>
-                    </div>
-                    {!activeId ? <p className={`text-xs mt-2 ${ui.muted}`}>Chat works immediately. Save the material if you want this chat thread persisted.</p> : null}
-                </section>
-
-                <section className={`rounded-[2rem] p-5 md:p-6 ${ui.card}`}>
-                    <button onClick={() => setLibraryOpen((prev) => !prev)} className="w-full flex items-center justify-between gap-3">
-                        <h2 className="text-2xl font-bold flex items-center gap-2"><Library size={20} /> Library ({library.length})</h2>
-                        <span className={`inline-flex items-center gap-2 text-sm ${ui.muted}`}>{libraryOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}{libraryOpen ? 'Collapse' : 'Expand'}</span>
-                    </button>
-                    {libraryOpen ? (
-                        <div className="grid gap-3 mt-4">
-                            {library.map((item) => {
-                                const parsed = resolveStoredData(item);
-                                const expanded = Boolean(expandedLibraryItems[item.id]);
-                                return (
-                                    <div key={item.id} className={`rounded-3xl p-4 ${activeId === item.id ? (lightMode ? 'bg-sky-50 border border-sky-200' : 'bg-sky-500/10 border border-sky-400/30') : ui.card}`}>
-                                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                            <div>
-                                                <h3 className="font-bold">{item.source_name || item.filename || `Material ${item.id}`}</h3>
-                                                <p className={`text-sm mt-1 ${ui.muted}`}>{new Date(item.created_at).toLocaleString()}</p>
-                                            </div>
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                                <span className={`text-xs px-3 py-1 rounded-full ${ui.badge}`}>{getItemCount(parsed)} items</span>
-                                                <button onClick={() => setExpandedLibraryItems((prev) => ({ ...prev, [item.id]: !prev[item.id] }))} className={`rounded-2xl px-4 py-2 text-sm font-semibold ${lightMode ? 'bg-slate-100 text-slate-900' : 'bg-white/10 text-white'}`}>
-                                                    {expanded ? 'Hide Details' : 'Show Details'}
-                                                </button>
-                                                <button onClick={() => openMaterial(item)} className="rounded-2xl px-4 py-2 bg-[linear-gradient(120deg,#0ea5e9,#2563eb)] text-white text-sm font-semibold">
-                                                    Open
-                                                </button>
-                                            </div>
-                                        </div>
-                                        {expanded ? (
-                                            <div className={`mt-4 rounded-2xl p-4 ${lightMode ? 'bg-slate-50 border border-slate-200' : 'bg-black/20 border border-white/10'}`}>
-                                                <div className="flex flex-wrap gap-2 mb-3">
-                                                    {Object.keys(parsed).map((key) => (
-                                                        <span key={key} className={`text-xs px-3 py-1 rounded-full ${ui.badge}`}>{TYPE_LABELS[key] || key}</span>
-                                                    ))}
-                                                </div>
-                                                <p className={`text-sm ${ui.muted}`}>Use Open to restore the exact saved generated content.</p>
-                                            </div>
-                                        ) : null}
-                                    </div>
-                                );
-                            })}
-                            {!library.length ? <p className={ui.muted}>No saved materials yet.</p> : null}
-                        </div>
-                    ) : null}
-                </section>
+                <LibraryPanel
+                    ui={ui}
+                    lightMode={lightMode}
+                    library={library}
+                    libraryOpen={libraryOpen}
+                    setLibraryOpen={setLibraryOpen}
+                    expandedLibraryItems={expandedLibraryItems}
+                    setExpandedLibraryItems={setExpandedLibraryItems}
+                    activeId={activeId}
+                    openMaterial={openMaterial}
+                />
 
                 <section className={`rounded-[2rem] p-5 md:p-6 ${ui.card}`}>
                     <h2 className="text-2xl font-bold mb-4">Progress Snapshot</h2>

@@ -1,20 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, RotateCcw, Volume2 } from 'lucide-react';
 
 const ACTIVE_KEY = 'asknlearn_active_material';
 
 const readActiveMaterial = () => {
     try {
         return JSON.parse(sessionStorage.getItem(ACTIVE_KEY) || '{}');
-    } catch (_error) {
+    } catch {
         return {};
     }
 };
 
 const AIFlashcardsPractice = () => {
     const navigate = useNavigate();
-    const material = useMemo(readActiveMaterial, []);
+    const material = useMemo(() => readActiveMaterial(), []);
     const cards = Array.isArray(material?.data?.flashcards) ? material.data.flashcards : [];
     const [index, setIndex] = useState(0);
 
@@ -34,6 +34,17 @@ const AIFlashcardsPractice = () => {
 
     const card = cards[index];
 
+    const handleSpeak = (text) => {
+        if (!('speechSynthesis' in window)) {
+            alert('Your browser does not support the Web Speech API.');
+            return;
+        }
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 0.9;
+        window.speechSynthesis.speak(utterance);
+    };
+
     return (
         <div className="min-h-screen bg-[#05070f] text-white p-4 md:p-8">
             <div className="max-w-5xl mx-auto">
@@ -52,12 +63,18 @@ const AIFlashcardsPractice = () => {
                         <div className="group [perspective:1000px]">
                             <div className="relative min-h-[250px] transition-transform duration-500 [transform-style:preserve-3d] group-hover:[transform:rotateY(180deg)]">
                                 <div className="absolute inset-0 rounded-3xl border border-white/10 bg-gradient-to-r from-pink-500/20 to-indigo-500/20 p-8 md:p-12 flex items-center justify-center text-center [backface-visibility:hidden]">
+                                    <button onClick={(e) => { e.stopPropagation(); handleSpeak(card?.q); }} className="absolute top-6 right-6 p-2 bg-white/10 rounded-full hover:bg-white/20 transition-colors text-white" title="Read Aloud">
+                                        <Volume2 size={18} />
+                                    </button>
                                     <div>
                                         <p className="text-xs uppercase tracking-[0.25em] text-neutral-300 mb-4">Question</p>
                                         <h2 className="text-2xl md:text-3xl font-semibold leading-relaxed">{card?.q}</h2>
                                     </div>
                                 </div>
                                 <div className="absolute inset-0 rounded-3xl border border-emerald-500/30 bg-emerald-500/10 p-8 md:p-12 flex items-center justify-center text-center [backface-visibility:hidden] [transform:rotateY(180deg)]">
+                                    <button onClick={(e) => { e.stopPropagation(); handleSpeak(card?.a); }} className="absolute top-6 right-6 p-2 bg-emerald-500/20 rounded-full hover:bg-emerald-500/40 transition-colors text-emerald-100" title="Read Aloud">
+                                        <Volume2 size={18} />
+                                    </button>
                                     <div>
                                         <p className="text-xs uppercase tracking-[0.25em] text-emerald-300 mb-4">Answer</p>
                                         <h2 className="text-2xl md:text-3xl font-semibold leading-relaxed">{card?.a}</h2>

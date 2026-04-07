@@ -7,15 +7,6 @@ import {
     BrainCircuit
 } from 'lucide-react';
 
-const iconPalette = [
-    'text-blue-400',
-    'text-emerald-400',
-    'text-violet-400',
-    'text-orange-400',
-    'text-pink-400',
-    'text-cyan-400',
-];
-
 const formatPercentage = (value) => `${Number(value || 0).toFixed(1)}%`;
 
 const CSQuizMaster = () => {
@@ -23,7 +14,7 @@ const CSQuizMaster = () => {
     const userId = localStorage.getItem('userId') || '0';
 
     const [selectedSubject, setSelectedSubject] = useState(null);
-    const [config, setConfig] = useState({ limit: 10, timer: 10 });
+    const [config, setConfig] = useState({ limit: 10, timer: 10, mode: 'normal' });
     const [dashboard, setDashboard] = useState({
         subjects: [],
         stats: null,
@@ -70,6 +61,7 @@ const CSQuizMaster = () => {
             state: {
                 limit: config.limit,
                 timer: config.timer,
+                mode: config.mode,
                 subjectName: selectedSubject.name,
             },
         });
@@ -80,7 +72,7 @@ const CSQuizMaster = () => {
             .filter(item => Number(item.average_percentage) < 75 && Number(item.total_attempts) > 0)
             .sort((a, b) => Number(a.average_percentage) - Number(b.average_percentage))
             .slice(0, 3);
-            
+
         if (!sortedHeatmap.length) {
             alert("You don't have any weak subjects yet! Play more quizzes so we can analyze your performance.");
             return;
@@ -92,7 +84,7 @@ const CSQuizMaster = () => {
             .map(s => s.name);
 
         const prompt = `The student is currently struggling with these specific Computer Science topics: ${weakNames.join(', ')}. Generate a strictly targeted 10-question MCQ practice exam that focuses purely on these core foundational concepts to help them improve. Include detailed explanations.`;
-        
+
         navigate('/ai-upload', { state: { autoPrompt: prompt } });
     };
 
@@ -189,28 +181,33 @@ const CSQuizMaster = () => {
                         <Sparkles size={22} className="text-blue-400" />
                         <h2 className="text-3xl font-bold tracking-tight">Choose a Subject (Heatmap)</h2>
                     </div>
-                    
+
                     <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/5 border border-white/10 rounded-2xl p-5">
-                        <div className="flex items-center gap-4 text-sm font-semibold">
+                        <div className="flex items-center flex-wrap gap-4 text-sm font-semibold">
                             <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-emerald-500"></div> &gt; 80% (Mastered)</span>
                             <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-yellow-400"></div> 60 - 80% (Average)</span>
                             <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-500"></div> &lt; 60% (Needs Work)</span>
                             <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-neutral-600"></div> Unattempted</span>
                         </div>
-                        <button onClick={handleWeaknessGenerator} className="bg-[linear-gradient(120deg,#f43f5e,#fb923c)] hover:opacity-90 transition-opacity text-white rounded-xl px-5 py-3 text-sm font-bold flex items-center justify-center gap-2 shadow-lg shadow-rose-500/20">
-                            <BrainCircuit size={16} /> Generate Quiz on Weaknesses
-                        </button>
+                        <div className="flex flex-col sm:flex-row gap-3">
+                            <button onClick={() => navigate('/quiz/adaptive', { state: { limit: 15, timer: 15, mode: 'exam', subjectName: 'Global Adaptive Exam' } })} className="bg-[linear-gradient(120deg,#8b5cf6,#3b82f6)] hover:opacity-90 transition-opacity text-white rounded-xl px-5 py-3 text-sm font-bold flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(59,130,246,0.3)]">
+                                <Trophy size={16} /> Global Adaptive Exam
+                            </button>
+                            <button onClick={handleWeaknessGenerator} className="bg-white/10 hover:bg-white/20 transition-colors border border-white/10 text-white rounded-xl px-5 py-3 text-sm font-bold flex items-center justify-center gap-2">
+                                <BrainCircuit size={16} /> Ask AI to Help
+                            </button>
+                        </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                        {dashboard.subjects.map((subject, index) => {
+                        {dashboard.subjects.map((subject) => {
                             const progress = progressMap[subject.id];
                             const heat = dashboard.heatmap?.find(h => h.subject_id === subject.id);
                             const avgValue = heat ? Number(heat.average_percentage) : null;
-                            
+
                             let accentColor = 'border-white/10 text-neutral-400 bg-white/5';
                             let iconColor = 'text-white/50 bg-black/40 border-white/5';
-                            
+
                             if (avgValue !== null) {
                                 if (avgValue >= 80) {
                                     accentColor = 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100';
@@ -307,6 +304,31 @@ const CSQuizMaster = () => {
                         </div>
 
                         <div className="space-y-8">
+                            <div>
+                                <label className="flex items-center gap-2 text-xs font-bold text-neutral-400 mb-3 uppercase tracking-widest">
+                                    <Trophy size={14} /> Exam Mode
+                                </label>
+                                <div className="grid grid-cols-2 gap-3 mb-3">
+                                    <button
+                                        onClick={() => setConfig({ ...config, mode: 'normal' })}
+                                        className={`py-3 rounded-xl text-sm font-bold transition-all ${config.mode === 'normal' ? 'bg-blue-600 text-white' : 'bg-white/5 border border-white/5 hover:bg-white/10 text-neutral-400'}`}
+                                    >
+                                        Normal
+                                    </button>
+                                    <button
+                                        onClick={() => setConfig({ ...config, mode: 'exam' })}
+                                        className={`py-3 rounded-xl text-sm font-bold transition-all ${config.mode === 'exam' ? 'bg-red-600 text-white shadow-[0_0_15px_rgba(220,38,38,0.5)]' : 'bg-white/5 border border-white/5 hover:bg-white/10 text-neutral-400'}`}
+                                    >
+                                        Simulator
+                                    </button>
+                                </div>
+                                {config.mode === 'exam' && (
+                                    <p className="text-xs text-red-400 mt-2 bg-red-500/10 p-2 rounded-lg border border-red-500/20">
+                                        ⚠️ Warning: Exam Mode enforces the strict timer and deducts 1 XP point for every incorrect answer.
+                                    </p>
+                                )}
+                            </div>
+
                             <div>
                                 <label className="flex items-center gap-2 text-xs font-bold text-neutral-400 mb-3 uppercase tracking-widest">
                                     <ListOrdered size={14} /> Questions

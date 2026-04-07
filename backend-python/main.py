@@ -156,7 +156,7 @@ def _transcribe_media_file(path: str, extension: str) -> str:
         # faster-whisper uses PyAV which natively supports parsing video files (like MP4) and extracting their audio automatically. No need for moviepy.
         segments, info = model.transcribe(path, beam_size=5, vad_filter=True)
         transcript = " ".join(segment.text.strip() for segment in segments if segment.text and segment.text.strip()).strip()
-        
+
         if not transcript:
             raise RuntimeError("No speech could be transcribed from the uploaded media.")
 
@@ -196,13 +196,13 @@ def _extract_text_from_upload(file: UploadFile, file_bytes: bytes) -> str:
                 status_code=400,
                 detail="Legacy .doc files are not directly readable here. Please convert to .docx or PDF.",
             )
-            
-        # UNIVERSAL INPUT FALLBACK: 
+
+        # UNIVERSAL INPUT FALLBACK:
         # Attempt standard file read for unknown extensions, parsing as plain text.
         extracted = read_file(tmp_path, ".txt")
         if extracted and len(extracted.strip()) > 5:
             return extracted
-            
+
         # Final universal binary-to-text string extraction for any fully unrecognised format
         import string
         import re
@@ -211,7 +211,7 @@ def _extract_text_from_upload(file: UploadFile, file_bytes: bytes) -> str:
         text = re.sub(r'\s+', ' ', "".join(chars)).strip()
         if len(text) > 10:
             return text
-            
+
     finally:
         try:
             os.remove(tmp_path)
@@ -283,6 +283,37 @@ def _build_schema(content_types: List[str], counts: Dict[str, Any]) -> str:
 
 def _build_prompt(source_text: str, content_types: List[str], counts: Dict[str, Any], language: str) -> str:
     schema = _build_schema(content_types, counts)
+    has_memory_map = "memory_map" in content_types
+
+    # When generating a memory map, we deliberately limit the source text to
+    # avoid the AI producing an oversized, broken Mermaid diagram.
+    source_limit = 3000 if has_memory_map else 12000
+    truncated_source = source_text[:source_limit]
+
+    memory_map_rules = ""
+    if has_memory_map:
+        memory_map_rules = """
+Memory Map (CRITICAL — read carefully):
+- The memory_map value MUST be a valid Mermaid mindmap string.
+- Start with exactly: mindmap
+- Use 2-space indentation ONLY. No tabs.
+- Structure: 1 root node → max 5 main branches → max 2 sub-items each.
+- Total nodes (including root): maximum 16.
+- Node labels: 1-5 words only. No punctuation, no special chars, no quotes inside labels.
+- Do NOT use: (), [], {}, arrows (-->), colons inside node text, or emoji.
+- Do NOT wrap the mindmap in code fences or quotes.
+- Valid example:
+  mindmap
+    root((Main Topic))
+      Branch One
+        Detail A
+        Detail B
+      Branch Two
+        Detail C
+      Branch Three
+        Detail D
+"""
+
     return f"""You are an expert study-assistant AI.
 Return ONLY one valid JSON object matching the schema below. No markdown fences, no extra text.
 Use language: {language}.
@@ -293,23 +324,12 @@ Schema:
 Rules:
 - Keep output fully grounded in source content.
 - For multiple-choice questions, correct_option must be one of A/B/C/D.
-- For memory_map, return Mermaid mindmap syntax as a single string.
-- Mermaid memory_map must begin with exactly `mindmap`.
-- Use spaces for indentation only.
-- Do not use bullets, numbering, markdown headings, arrows, or explanation text in memory_map.
-- Keep node labels short and plain.
-- Example:
-  mindmap
-    root((Main Topic))
-      Branch One
-        Detail A
-      Branch Two
-        Detail B
 - Do not add any keys not present in schema.
-
-Source content:
-{source_text[:12000]}
+{memory_map_rules}
+Source content (summarised for accuracy):
+{truncated_source}
 """
+
 
 
 def _extract_json_object(text: str) -> Dict[str, Any]:
@@ -467,7 +487,18 @@ async def chat_about_material(
 
     generated = _safe_json_loads(generatedJson, {})
     chat_history = _safe_json_loads(history, [])
-    if socratic_mode:
+
+    # Detect free-form mode: no source material provided at all
+    has_material = bool(sourceText.strip()) or (generated and generated != {})
+
+    if not has_material:
+        # Pure free-form — no material restrictions (used by Study Planner, Performance Report, etc.)
+        prompt = f"""You are AsknLearn AI Assistant, an expert study coach and educator.
+Answer in {language}.
+
+{question}
+"""
+    elif socratic_mode:
         prompt = f"""You are AsknLearn Tutor, practicing Socratic method.
 Answer in {language}.
 Instead of giving the direct answer immediately, ask a guiding question that helps the user figure it out themselves.
@@ -498,7 +529,9 @@ User question:
 {question}
 """
 
-    prompt += """
+    # Only add JSON format requirement for material-based chat (not free-form)
+    if has_material:
+        prompt += """
 
 CRITICAL REQUIRED OUTPUT FORMAT:
 You MUST respond with a valid JSON block enclosed in ```json and ```.
@@ -511,13 +544,21 @@ The JSON must have this exact structure:
     try:
         generation = _generate_with_gemini(prompt, preferred_model=os.getenv("GEMINI_MODEL", ""))
         text = generation["response_text"].strip()
-        
-        # Cleanup markdown JSON blocks
+
+        if not has_material:
+            # Free-form: return raw text directly
+            return {
+                "answer": text,
+                "suggested_followups": [],
+                "model_used": generation["model_used"],
+            }
+
+        # Material-based: parse JSON response
         if "```json" in text:
             text = text.split("```json")[-1].split("```")[0].strip()
         elif "```" in text:
             text = text.split("```")[-1].split("```")[0].strip()
-            
+
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
@@ -530,6 +571,31 @@ The JSON must have this exact structure:
         }
     except Exception as error:
         raise HTTPException(status_code=500, detail=f"Chat failed: {error}")
+
+
+@app.post("/free-chat")
+async def free_chat(
+    question: str = Form(...),
+    language: str = Form(default="English"),
+):
+    """Open-ended AI generation endpoint — not restricted to source material.
+    Used by Study Planner, Performance Reports, and any feature needing
+    free-form AI responses.
+    """
+    if not question.strip():
+        raise HTTPException(status_code=400, detail="Question is required.")
+
+    prompt = f"""You are AsknLearn AI Assistant. Answer in {language}.
+{question}
+"""
+    try:
+        generation = _generate_with_gemini(prompt, preferred_model=os.getenv("GEMINI_MODEL", ""))
+        return {
+            "answer": generation["response_text"],
+            "model_used": generation["model_used"],
+        }
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Free chat failed: {error}")
 
 
 @app.get("/models")

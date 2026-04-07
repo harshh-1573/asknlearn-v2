@@ -8,10 +8,12 @@ import QuizPage from './pages/QuizPage';
 import AIStudy from './pages/AIStudy';
 import AIFlashcardsPractice from './pages/AIFlashcardsPractice';
 import AIQuizPractice from './pages/AIQuizPractice';
+import WorkspaceChat from './pages/WorkspaceChat';
+import StudyPlanner from './pages/StudyPlanner';
 
 /**
  * PrivateRoute Component
- * Checks for a JWT token in localStorage. 
+ * Checks for a JWT token in localStorage.
  * If found, it renders the page; otherwise, it redirects to login.
  */
 const PrivateRoute = ({ children }) => {
@@ -26,11 +28,11 @@ function App() {
                 {/* --- Public Routes --- */}
                 <Route path="/login" element={<Login />} />
                 <Route path="/register" element={<Register />} />
-                
+
                 {/* --- Protected Routes --- */}
-                <Route 
-                    path="/dashboard" 
-                    element={<PrivateRoute><Dashboard /></PrivateRoute>} 
+                <Route
+                    path="/dashboard"
+                    element={<PrivateRoute><Dashboard /></PrivateRoute>}
                 />
 
                 <Route
@@ -38,14 +40,24 @@ function App() {
                     element={<PrivateRoute><CSQuizMaster /></PrivateRoute>}
                 />
 
-                <Route 
-                    path="/quiz/:subjectId" 
-                    element={<PrivateRoute><QuizPage /></PrivateRoute>} 
+                <Route
+                    path="/quiz/:subjectId"
+                    element={<PrivateRoute><QuizPage /></PrivateRoute>}
                 />
 
-                <Route 
-                    path="/ai-upload" 
-                    element={<PrivateRoute><AIStudy /></PrivateRoute>} 
+                <Route
+                    path="/ai-upload"
+                    element={<PrivateRoute><AIStudy /></PrivateRoute>}
+                />
+
+                <Route
+                    path="/workspace-chat"
+                    element={<PrivateRoute><WorkspaceChat /></PrivateRoute>}
+                />
+
+                <Route
+                    path="/study-planner"
+                    element={<PrivateRoute><StudyPlanner /></PrivateRoute>}
                 />
 
                 <Route
@@ -61,7 +73,7 @@ function App() {
                 {/* --- Default Redirects --- */}
                 {/* If the user hits the root, send them to login */}
                 <Route path="/" element={<Navigate to="/login" replace />} />
-                
+
                 {/* 404 Catch-all: Send logged-in users to dashboard */}
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
