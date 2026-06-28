@@ -5,7 +5,7 @@ import re
 import tempfile
 import urllib.request
 from functools import lru_cache
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -402,8 +402,10 @@ def _generate_with_gemini(prompt: str, preferred_model: str = "") -> Dict[str, A
 
 @app.post("/process-file")
 async def process_file(
+    files: Optional[List[UploadFile]] = File(default=None),
     file: UploadFile = File(default=None),
     sourceText: str = Form(default=""),
+    sourceUrls: str = Form(default="[]"),
     sourceName: str = Form(default=""),
     model: str = Form(default="Gemini"),
     language: str = Form(default="English"),
@@ -411,19 +413,66 @@ async def process_file(
     counts: str = Form(default="{}"),
 ):
     try:
-        if file is None and not sourceText.strip():
-            raise HTTPException(status_code=400, detail="Provide either a file or sourceText.")
-
-        extracted_text = sourceText.strip()
-        filename = sourceName.strip() or (file.filename if file else "text-input")
-
+        upload_list: List[UploadFile] = []
         if file is not None:
-            file_bytes = await file.read()
-            extracted_text = _extract_text_from_upload(file, file_bytes)
-        elif extracted_text.lower().startswith(("http://", "https://")):
-            extracted_text = _extract_text_from_url(extracted_text)
+            upload_list.append(file)
+        if files:
+            upload_list.extend([item for item in files if item is not None and item.filename])
 
-        if not extracted_text or len(extracted_text.strip()) < 20:
+        deduped_uploads: List[UploadFile] = []
+        seen_upload_keys = set()
+        for upload in upload_list:
+            upload_key = (upload.filename or "", getattr(upload, "content_type", "") or "")
+            if upload_key in seen_upload_keys:
+                continue
+            seen_upload_keys.add(upload_key)
+            deduped_uploads.append(upload)
+
+        raw_text = sourceText.strip()
+        parsed_urls = _safe_json_loads(sourceUrls, [])
+        if not isinstance(parsed_urls, list):
+            parsed_urls = []
+        parsed_urls = [str(item).strip() for item in parsed_urls if str(item).strip()]
+
+        if not deduped_uploads and not raw_text and not parsed_urls:
+            raise HTTPException(status_code=400, detail="Provide files, text, or URLs.")
+
+        extracted_parts: List[str] = []
+        source_labels: List[str] = []
+
+        for upload in deduped_uploads:
+            file_bytes = await upload.read()
+            extracted = _extract_text_from_upload(upload, file_bytes)
+            if extracted:
+                source_labels.append(upload.filename or "file")
+                extracted_parts.append(f"--- FILE: {upload.filename or 'uploaded file'} ---\n{extracted}")
+
+        text_only_urls = []
+        if raw_text:
+            text_lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+            for line in text_lines:
+                if line.lower().startswith(("http://", "https://")):
+                    text_only_urls.append(line)
+            plain_text_lines = [line for line in text_lines if line not in text_only_urls]
+            if plain_text_lines:
+                joined_text = "\n".join(plain_text_lines).strip()
+                extracted_parts.append(f"--- NOTES / TEXT INPUT ---\n{joined_text}")
+                source_labels.append("text-notes")
+
+        all_urls: List[str] = []
+        for candidate in parsed_urls + text_only_urls:
+            if candidate not in all_urls:
+                all_urls.append(candidate)
+
+        for url in all_urls:
+            extracted_url_text = _extract_text_from_url(url)
+            extracted_parts.append(f"--- URL: {url} ---\n{extracted_url_text}")
+            source_labels.append(url)
+
+        extracted_text = "\n\n".join(part.strip() for part in extracted_parts if part and part.strip()).strip()
+        filename = sourceName.strip() or (", ".join(source_labels[:3]) if source_labels else "text-input")
+
+        if not extracted_text or len(extracted_text.strip()) < 8:
             raise HTTPException(status_code=400, detail="Could not extract enough text from source.")
 
         try:
@@ -462,6 +511,7 @@ async def process_file(
         return {
             "status": "success",
             "filename": filename,
+            "source_name": filename,
             "source_text": extracted_text[:20000],
             "data": generated,
             "selected_types": requested_types,

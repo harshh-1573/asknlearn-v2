@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { API_BASE } from '../config/api';
 import {
     ArrowLeft, BookOpenCheck, Clock3, ListOrdered, Loader2, Sparkles,
     Trophy, TrendingUp, X, BarChart3, History, Target, CheckCircle2,
@@ -27,7 +28,7 @@ const CSQuizMaster = () => {
     useEffect(() => {
         const loadDashboard = async () => {
             try {
-                const res = await axios.get(`http://localhost:5000/api/cs-quiz/dashboard/${userId}`);
+                const res = await axios.get(`${API_BASE}/api/cs-quiz/dashboard/${userId}`);
                 setDashboard({
                     subjects: res.data.subjects || [],
                     stats: res.data.stats || null,

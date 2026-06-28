@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
+import { API_BASE } from '../config/api';
 import {
     ChevronLeft, ChevronRight, CheckCircle2, XCircle,
     Award, Lightbulb, Timer as TimerIcon, Activity, Trophy, RotateCcw
@@ -58,9 +59,9 @@ const QuizPage = () => {
                 let url;
                 if (subjectId === 'adaptive') {
                     const uId = localStorage.getItem('userId') || '0';
-                    url = `http://localhost:5000/api/questions/adaptive/${uId}`;
+                    url = `${API_BASE}/api/questions/adaptive/${uId}`;
                 } else {
-                    url = `http://localhost:5000/api/questions/${subjectId}?limit=${limit}`;
+                    url = `${API_BASE}/api/questions/${subjectId}?limit=${limit}`;
                 }
 
                 const res = await axios.get(url);
@@ -140,7 +141,7 @@ const QuizPage = () => {
 
             const safeSubjectId = subjectId === 'adaptive' ? 0 : subjectId;
 
-            await axios.post('http://localhost:5000/api/submit-quiz', {
+            await axios.post(`${API_BASE}/api/submit-quiz`, {
                 userId,
                 subjectId: safeSubjectId,
                 quizSessionId,

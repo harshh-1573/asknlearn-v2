@@ -13,11 +13,12 @@ module.exports = ({
     const router = express.Router();
     const pythonServiceUrl = process.env.AI_PYTHON_URL || 'http://localhost:8000';
 
-    router.post('/process', upload.single('file'), async (req, res) => {
+    router.post('/process', upload.any(), async (req, res) => {
         const {
             userId,
             subjectId,
             sourceText = '',
+            sourceUrls = '[]',
             sourceName = '',
             model = 'Gemini',
             language = 'English',
@@ -40,12 +41,24 @@ module.exports = ({
             payload.append('contentTypes', contentTypes);
             payload.append('counts', counts);
             payload.append('sourceText', sourceText);
+            payload.append('sourceUrls', sourceUrls);
             payload.append('sourceName', sourceName);
 
-            if (req.file) {
-                payload.append('file', req.file.buffer, {
-                    filename: req.file.originalname,
-                    contentType: req.file.mimetype || 'application/octet-stream',
+            const requestFiles = Array.isArray(req.files) ? req.files : [];
+            const normalizedFiles = requestFiles.filter((item) => item && item.buffer);
+
+            if (normalizedFiles.length === 1) {
+                const single = normalizedFiles[0];
+                payload.append('file', single.buffer, {
+                    filename: single.originalname,
+                    contentType: single.mimetype || 'application/octet-stream',
+                });
+            }
+
+            for (const currentFile of normalizedFiles) {
+                payload.append('files', currentFile.buffer, {
+                    filename: currentFile.originalname,
+                    contentType: currentFile.mimetype || 'application/octet-stream',
                 });
             }
 
@@ -55,8 +68,12 @@ module.exports = ({
             });
 
             const generatedData = aiResponse.data?.data || {};
-            const persistedSourceName = sourceName || req.file?.originalname || 'text-input';
-            const persistedFilename = req.file?.originalname || null;
+            const fileNames = normalizedFiles.map((item) => item.originalname).filter(Boolean);
+            const persistedSourceName = sourceName
+                || aiResponse.data?.source_name
+                || (fileNames.length > 1 ? `Multi-source bundle (${fileNames.length} files)` : fileNames[0])
+                || 'text-input';
+            const persistedFilename = fileNames.length > 1 ? fileNames.join(', ') : (fileNames[0] || null);
             const extractedContent = aiResponse.data?.source_text || sourceText || null;
 
             const shouldAutoSave = String(autoSave).toLowerCase() === 'true';

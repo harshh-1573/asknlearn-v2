@@ -50,7 +50,3 @@ inputs/
 *.jpg
 *.jpeg
 *.png
-
-# Backups and local input folders
-backups/
-input/

@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
+import { API_BASE } from '../config/api';
 import {
     ArrowLeft, BrainCircuit, Check, Loader2,
     Moon, Sun, Wand2,
-    Trophy, Shield
+    Trophy, Shield, X, Star
 } from 'lucide-react';
 import {
     TYPE_LABELS,
@@ -14,7 +15,7 @@ import GeneratedSections from '../components/ai-study/GeneratedSections';
 import TutorChatPanel from '../components/ai-study/TutorChatPanel';
 import LibraryPanel from '../components/ai-study/LibraryPanel';
 
-const API = 'http://localhost:5000';
+const API = API_BASE;
 const ACTIVE_KEY = 'asknlearn_active_material';
 const THEME_KEY = 'asknlearn_theme';
 
@@ -79,6 +80,19 @@ const AIStudy = () => {
     const [xpAnimation, setXpAnimation] = useState('');
     const [isListening, setIsListening] = useState(false);
     const [speechError, setSpeechError] = useState('');
+    const [xpRulesOpen, setXpRulesOpen] = useState(false);
+
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape') setXpRulesOpen(false);
+        };
+        if (xpRulesOpen) {
+            window.addEventListener('keydown', handleKeyDown);
+        }
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [xpRulesOpen]);
 
     const level = Math.floor(xp / 100) + 1;
     const xpProgress = xp % 100;
@@ -308,7 +322,7 @@ const AIStudy = () => {
         event.preventDefault();
         setLoading(true);
         setError('');
-        setSavedBanner('');
+        setSavedBanner('Uploading and starting task...');
 
         try {
             const form = new FormData();
@@ -332,42 +346,91 @@ const AIStudy = () => {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
 
-            const data = res.data?.data || {};
-            const materialId = res.data?.materialId || null;
-            const resolvedName = res.data?.sourceName || sourceName || file?.name || 'Generated Material';
-            const resolvedText = res.data?.sourceText || sourceText || '';
+            const taskId = res.data?.task_id;
+            if (!taskId) throw new Error('Failed to start AI task');
 
-            setGenerated(data);
-            setActiveId(materialId);
-            setActiveName(resolvedName);
-            setActiveContent(resolvedText);
-            setChat([]);
-            setGuessInputs({});
-            setFlashcardFlip({});
-            setMcqFeedback({});
-            setFillFeedback({});
-            setFillHints({});
-            setTfFeedback({});
-            setYnFeedback({});
-            setWhReveal({});
-            setModelUsed(res.data?.modelUsed || '');
-            setSavedBanner(res.data?.saved ? 'Saved to study_materials.' : '');
+            const checkStatus = async () => {
+                try {
+                    const statusRes = await axios.get(`${API}/api/ai/status/${taskId}`);
+                    const task = statusRes.data;
+                    
+                    if (task.status === 'error') {
+                        throw new Error(task.error || 'AI generation failed');
+                    } else if (task.status === 'completed') {
+                        const data = task.result?.data || {};
+                        const resolvedName = res.data?.sourceName || 'Generated Material';
+                        const resolvedText = task.result?.source_text || sourceText || '';
+                        
+                        setGenerated(data);
+                        setActiveName(resolvedName);
+                        setActiveContent(resolvedText);
+                        setChat([]);
+                        setGuessInputs({});
+                        setFlashcardFlip({});
+                        setMcqFeedback({});
+                        setFillFeedback({});
+                        setFillHints({});
+                        setTfFeedback({});
+                        setYnFeedback({});
+                        setWhReveal({});
+                        setModelUsed(task.result?.model_used || '');
 
-            persistActive({
-                id: materialId,
-                sourceName: resolvedName,
-                content: resolvedText,
-                data,
-            });
+                        let autoId = null;
+                        let autoSaved = false;
+                        if (res.data?.autoSave) {
+                            try {
+                                const saveRes = await axios.post(`${API}/api/ai/save-material`, {
+                                    userId,
+                                    subjectId: res.data?.subjectId || null,
+                                    sourceName: resolvedName,
+                                    filename: file?.name || null,
+                                    sourceText: resolvedText,
+                                    generatedData: data,
+                                });
+                                autoId = saveRes.data?.materialId || null;
+                                setActiveId(autoId);
+                                autoSaved = true;
+                            } catch (saveErr) {
+                                console.error('Autosave failed:', saveErr);
+                            }
+                        }
 
-            await loadLibraryAndStats();
-            if (materialId) await loadChatHistory(materialId);
+                        if (autoSaved) {
+                            setSavedBanner('Task completed and saved to library!');
+                        } else {
+                            setSavedBanner('Generation complete!');
+                        }
 
-            await rewardXp(20);
+                        persistActive({
+                            id: autoId,
+                            sourceName: resolvedName,
+                            content: resolvedText,
+                            data,
+                        });
+
+                        await loadLibraryAndStats();
+                        if (autoId) await loadChatHistory(autoId);
+                        await rewardXp(20);
+                        setLoading(false);
+                        
+                        setTimeout(() => setSavedBanner(''), 4000);
+                    } else {
+                        setSavedBanner(`Processing: ${task.status.replace('_', ' ')}...`);
+                        setTimeout(checkStatus, 3000);
+                    }
+                } catch (err) {
+                    setError(err.response?.data?.error || err.message || 'Status check failed.');
+                    setLoading(false);
+                    setSavedBanner('');
+                }
+            };
+            
+            checkStatus();
+
         } catch (generateError) {
             setError(generateError.response?.data?.error || generateError.message || 'AI generation failed.');
-        } finally {
             setLoading(false);
+            setSavedBanner('');
         }
     };
 
@@ -490,8 +553,12 @@ const AIStudy = () => {
                         <ArrowLeft size={16} /> Back to Dashboard
                     </button>
                     <div className="flex items-center gap-3">
-                        <div className={`relative hidden sm:flex items-center gap-3 px-4 py-2 rounded-2xl ${ui.card}`}>
-                            <div className="flex items-center gap-2 font-bold select-none cursor-default" title="Your current Level">
+                        <div 
+                            onClick={() => setXpRulesOpen(true)}
+                            title="Click to view XP earning rules & ranks"
+                            className={`relative hidden sm:flex items-center gap-3 px-4 py-2 rounded-2xl cursor-pointer hover:border-amber-500/30 transition-all ${ui.card}`}
+                        >
+                            <div className="flex items-center gap-2 font-bold select-none cursor-pointer" title="Your current Level">
                                 <Shield className="text-amber-500 fill-amber-500/10" size={18} /> Level {level}
                             </div>
                             <div className="w-24 h-2 bg-slate-200/20 rounded-full overflow-hidden relative">
@@ -697,6 +764,195 @@ const AIStudy = () => {
                     ) : <p className={ui.muted}>No stats available.</p>}
                 </section>
             </div>
+
+            {xpRulesOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    {/* Backdrop overlay */}
+                    <div 
+                        className="absolute inset-0 bg-black/60 backdrop-blur-md transition-opacity duration-300"
+                        onClick={() => setXpRulesOpen(false)}
+                    />
+                    
+                    {/* Modal content */}
+                    <div className={`relative w-full max-w-2xl rounded-[2.5rem] border shadow-2xl p-6 md:p-8 overflow-hidden z-10 transition-all duration-300 scale-100 ${
+                        lightMode 
+                            ? 'bg-white/95 border-slate-200 text-slate-900 shadow-slate-200/50' 
+                            : 'bg-[#0f172a]/95 border-white/10 text-white shadow-black/80'
+                    }`}>
+                        {/* Background glowing gradients */}
+                        <div className="absolute -top-40 -right-40 w-80 h-80 bg-amber-500/10 rounded-full blur-[100px] pointer-events-none" />
+                        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-purple-500/10 rounded-full blur-[100px] pointer-events-none" />
+                        
+                        {/* Header */}
+                        <div className="flex items-center justify-between pb-5 border-b border-slate-200/20 mb-6 relative z-10">
+                            <div className="flex items-center gap-3">
+                                <div className="p-3 bg-amber-500/20 rounded-2xl text-amber-500 animate-pulse">
+                                    <Trophy size={24} />
+                                </div>
+                                <div>
+                                    <h3 className="text-2xl font-black tracking-tight">XP Rules &amp; Rank Tiers</h3>
+                                    <p className={`text-xs font-semibold uppercase tracking-wider ${lightMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                                        Learn how to level up your score
+                                    </p>
+                                </div>
+                            </div>
+                            <button 
+                                onClick={() => setXpRulesOpen(false)}
+                                className={`p-2 rounded-xl border transition-all ${
+                                    lightMode 
+                                        ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-500' 
+                                        : 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white'
+                                }`}
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        {/* Rules list */}
+                        <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 relative z-10">
+                            {/* How to Earn */}
+                            <div>
+                                <h4 className="text-xs font-bold uppercase tracking-widest text-amber-500 mb-3">How to Earn XP</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {/* CS Quiz */}
+                                    <div className={`p-5 rounded-2xl border ${lightMode ? 'bg-slate-50/50 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className="text-lg">🎓</span>
+                                            <h5 className="font-bold text-sm">CS Quiz Master</h5>
+                                        </div>
+                                        <ul className="space-y-2.5 text-xs font-medium">
+                                            <li className="flex items-center justify-between">
+                                                <span className="opacity-70">Correct MCQ Answer</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">+10 XP</span>
+                                            </li>
+                                            <li className="flex items-center justify-between">
+                                                <span className="opacity-70">Incorrect Penalty (Exam Mode)</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">-1 XP</span>
+                                            </li>
+                                            <li className="flex items-center justify-between">
+                                                <span className="opacity-70">Incorrect Penalty (Practice)</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-500/10 text-slate-400 border border-slate-500/10">0 XP</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+
+                                    {/* AI Module */}
+                                    <div className={`p-5 rounded-2xl border ${lightMode ? 'bg-slate-50/50 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className="text-lg">🤖</span>
+                                            <h5 className="font-bold text-sm">AI Study Tools</h5>
+                                        </div>
+                                        <ul className="space-y-2.5 text-xs font-medium">
+                                            <li className="flex items-center justify-between">
+                                                <span className="opacity-70">Generate Study Material</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">+20 XP</span>
+                                            </li>
+                                            <li className="flex items-center justify-between">
+                                                <span className="opacity-70">Ask Socratic Tutor Question</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">+5 XP</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Level Up System */}
+                            <div className={`p-5 rounded-2xl border ${lightMode ? 'bg-slate-50/50 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                <h4 className="text-xs font-bold uppercase tracking-widest text-purple-400 mb-2">Level Up Progression</h4>
+                                <p className="text-xs font-medium opacity-80 leading-relaxed">
+                                    Levels are calculated directly from your total XP. You level up for every <span className="font-bold text-amber-500">100 XP</span> earned. Keep exploring AI Study Tools and answering quizzes to unlock higher ranks!
+                                </p>
+                            </div>
+
+                            {/* Rank Tiers */}
+                            <div>
+                                <h4 className="text-xs font-bold uppercase tracking-widest text-amber-500 mb-3">AskNLearn Rank Tiers</h4>
+                                <div className="space-y-2">
+                                    {/* Bronze Novice */}
+                                    <div className={`flex items-center justify-between p-3.5 rounded-xl border ${lightMode ? 'bg-slate-50/30 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-orange-500/20 rounded-lg text-orange-500">
+                                                <Star size={16} />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold">Bronze Novice</p>
+                                                <p className="text-[10px] opacity-50">Starting point for all new learners</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-bold text-orange-400">0 - 99 XP</span>
+                                    </div>
+
+                                    {/* Silver Scholar */}
+                                    <div className={`flex items-center justify-between p-3.5 rounded-xl border ${lightMode ? 'bg-slate-50/30 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-slate-400/20 rounded-lg text-slate-400">
+                                                <Star size={16} />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold">Silver Scholar</p>
+                                                <p className="text-[10px] opacity-50">Unlock at level 2</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-bold text-slate-400">100+ XP</span>
+                                    </div>
+
+                                    {/* Gold Master */}
+                                    <div className={`flex items-center justify-between p-3.5 rounded-xl border ${lightMode ? 'bg-slate-50/30 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-yellow-400/20 rounded-lg text-yellow-400">
+                                                <Star size={16} />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold">Gold Master</p>
+                                                <p className="text-[10px] opacity-50">Unlock at level 6</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-bold text-yellow-400">500+ XP</span>
+                                    </div>
+
+                                    {/* Platinum Prodigy */}
+                                    <div className={`flex items-center justify-between p-3.5 rounded-xl border ${lightMode ? 'bg-slate-50/30 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-slate-200/20 rounded-lg text-slate-200">
+                                                <Star size={16} />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold">Platinum Prodigy</p>
+                                                <p className="text-[10px] opacity-50">Unlock at level 16</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-bold text-slate-200">1,500+ XP</span>
+                                    </div>
+
+                                    {/* Diamond Legend */}
+                                    <div className={`flex items-center justify-between p-3.5 rounded-xl border bg-gradient-to-r from-cyan-500/10 to-transparent ${lightMode ? 'border-cyan-200/50' : 'border-cyan-500/20'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-cyan-400/20 rounded-lg text-cyan-400 drop-shadow-[0_0_8px_rgba(34,211,238,0.4)]">
+                                                <Star size={16} fill="currentColor" />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold text-cyan-400 drop-shadow-sm">Diamond Legend</p>
+                                                <p className="text-[10px] opacity-50">Unlock at level 51 - Ultimate Learner</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-bold text-cyan-400">5,000+ XP</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Footer */}
+                        <div className="flex justify-end pt-5 border-t border-slate-200/20 mt-6 relative z-10">
+                            <button
+                                onClick={() => setXpRulesOpen(false)}
+                                className="px-6 py-2.5 rounded-xl font-bold bg-gradient-to-r from-amber-500 to-yellow-500 text-black hover:from-amber-400 hover:to-yellow-400 shadow-lg shadow-amber-500/20 active:scale-95 transition-all text-xs"
+                            >
+                                Got it, Thanks!
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

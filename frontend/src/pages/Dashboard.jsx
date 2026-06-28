@@ -1,13 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
+import { API_BASE } from '../config/api';
+import { io } from 'socket.io-client';
 import {
     ArrowRight, BookOpenCheck, BrainCircuit, LogOut, Moon, Sparkles, Sun,
-    User, Shield, History, Settings, Trophy, LayoutDashboard, Bookmark, Target, Phone, Mail, Award, Loader2, Save, FileText, Folder, Calendar, Star, Hexagon, BarChart3, Check, Boxes
+    User, Users, Shield, History, Settings, Trophy, LayoutDashboard, Bookmark, Target, Phone, Mail, Award, Loader2, Save, FileText, Folder, Calendar, Star, Hexagon, BarChart3, Check, Boxes, Menu, X, MessageSquare, Send,
+    Paperclip, Mic, Image, Video, Music
 } from 'lucide-react';
 
 const THEME_KEY = 'asknlearn_theme';
-const API = 'http://localhost:5000';
+const API = API_BASE;
+const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
 
 const Dashboard = () => {
     const navigate = useNavigate();
@@ -18,8 +22,274 @@ const Dashboard = () => {
     const [theme, setTheme] = useState(localStorage.getItem(THEME_KEY) || 'dark');
     const lightMode = theme === 'light';
 
-    // Sidebar Navigation State — support deep-link from other pages via location.state.tab
+    // Sidebar Navigation State â€” support deep-link from other pages via location.state.tab
     const [activeTab, setActiveTab] = useState(location.state?.tab || 'overview');
+
+    // Chat States
+    const [socket, setSocket] = useState(null);
+    const [chatGroups, setChatGroups] = useState([]);
+    const [activeChatGroup, setActiveChatGroup] = useState(null);
+    const [chatMessages, setChatMessages] = useState([]);
+    const [inputMsg, setInputMsg] = useState('');
+    const [unreadMessages, setUnreadMessages] = useState(0);
+    const [unreadRoomMessages, setUnreadRoomMessages] = useState({});
+    const [selectedChatUser, setSelectedChatUser] = useState(null);
+    const [chatMembers, setChatMembers] = useState([]);
+    const messagesEndRef = useRef(null);
+    const activeChatGroupRef = useRef(null);
+    
+    useEffect(() => { activeChatGroupRef.current = activeChatGroup; }, [activeChatGroup]);
+
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    useEffect(() => {
+        if (activeTab === 'chat') scrollToBottom();
+    }, [chatMessages, activeTab]);
+
+    useEffect(() => {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+
+        const newSocket = io(API_BASE.replace('/api', ''), { withCredentials: true, autoConnect: true });
+        setSocket(newSocket);
+
+        const fetchGroups = async () => {
+            try {
+                const res = await axios.get(`${API_BASE}/api/chat/groups`, { headers: { Authorization: `Bearer ${token}` } });
+                setChatGroups(res.data.groups || []);
+                if (res.data.groups && res.data.groups.length > 0) {
+                    setActiveChatGroup(res.data.groups[0].id);
+                    res.data.groups.forEach(g => newSocket.emit('join_room', g.id));
+                    const msgRes = await axios.get(`${API_BASE}/api/chat/groups/${res.data.groups[0].id}/messages`, { headers: { Authorization: `Bearer ${token}` } });
+                    setChatMessages(msgRes.data.messages || []);
+                }
+            } catch (err) { console.error('Chat error', err); }
+        };
+        fetchGroups();
+
+        const fetchMembers = async () => {
+            try {
+                const res = await axios.get(`${API_BASE}/api/chat/members`, { headers: { Authorization: `Bearer ${token}` } });
+                setChatMembers(res.data.members || []);
+            } catch (err) { console.error('Chat members error', err); }
+        };
+        fetchMembers();
+
+        newSocket.on('receive_message', (msg) => {
+            if (String(msg.group_id) === String(activeChatGroupRef.current)) {
+                setChatMessages((prev) => [...prev, msg]);
+            } else {
+                setUnreadRoomMessages((prev) => ({ ...prev, [msg.group_id]: (prev[msg.group_id] || 0) + 1 }));
+            }
+            
+            setActiveTab((currentTab) => {
+                if (currentTab !== 'chat') setUnreadMessages((u) => u + 1);
+                return currentTab;
+            });
+        });
+
+        return () => newSocket.disconnect();
+    }, []);
+
+    // Universal Media / Voice Note Upload States
+    const [selectedAttachment, setSelectedAttachment] = useState(null);
+    const [uploadingAttachment, setUploadingAttachment] = useState(false);
+    const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+    const [fileAccept, setFileAccept] = useState('*');
+    const [isRecording, setIsRecording] = useState(false);
+    const [recordingDuration, setRecordingDuration] = useState(0);
+    const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState(null);
+    const [isDragging, setIsDragging] = useState(false);
+    const [chatActionMsg, setChatActionMsg] = useState('');
+
+    const chatFileInputRef = useRef(null);
+    const mediaRecorderRef = useRef(null);
+    const audioChunksRef = useRef([]);
+    const recordingIntervalRef = useRef(null);
+
+    // Auto-create preview URL for images
+    useEffect(() => {
+        if (!selectedAttachment) {
+            setAttachmentPreviewUrl(null);
+            return;
+        }
+        if (selectedAttachment.type.startsWith('image/')) {
+            const url = URL.createObjectURL(selectedAttachment);
+            setAttachmentPreviewUrl(url);
+            return () => URL.revokeObjectURL(url);
+        }
+    }, [selectedAttachment]);
+
+    const startRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioChunksRef.current = [];
+            const mediaRecorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = mediaRecorder;
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data && e.data.size > 0) {
+                    audioChunksRef.current.push(e.data);
+                }
+            };
+
+            mediaRecorder.onstop = () => {
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                const audioFile = new File([audioBlob], `voice-note-${Date.now()}.webm`, { type: 'audio/webm' });
+                setSelectedAttachment(audioFile);
+                stream.getTracks().forEach(track => track.stop());
+            };
+
+            mediaRecorder.start();
+            setIsRecording(true);
+            setRecordingDuration(0);
+            recordingIntervalRef.current = setInterval(() => {
+                setRecordingDuration(prev => prev + 1);
+            }, 1000);
+        } catch (err) {
+            console.error('Failed to start recording:', err);
+            alert('Microphone access denied or not supported.');
+        }
+    };
+
+    const stopRecording = () => {
+        if (mediaRecorderRef.current && isRecording) {
+            mediaRecorderRef.current.stop();
+            setIsRecording(false);
+            clearInterval(recordingIntervalRef.current);
+        }
+    };
+
+    const cancelRecording = () => {
+        if (mediaRecorderRef.current && isRecording) {
+            mediaRecorderRef.current.ondataavailable = null;
+            mediaRecorderRef.current.stop();
+            mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+            setIsRecording(false);
+            clearInterval(recordingIntervalRef.current);
+            audioChunksRef.current = [];
+        }
+    };
+
+    const formatDuration = (seconds) => {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    };
+
+    const formatAttachmentSize = (size) => {
+        if (!size) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(size) / Math.log(k));
+        return parseFloat((size / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
+    const triggerFileSelect = (acceptType) => {
+        setFileAccept(acceptType);
+        setAttachmentMenuOpen(false);
+        setTimeout(() => {
+            chatFileInputRef.current?.click();
+        }, 50);
+    };
+
+    const handlePaste = (e) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].kind === 'file') {
+                const file = items[i].getAsFile();
+                if (file) {
+                    setSelectedAttachment(file);
+                    e.preventDefault();
+                    break;
+                }
+            }
+        }
+    };
+
+    const handleDragOver = (e) => {
+        e.preventDefault();
+        setIsDragging(true);
+    };
+
+    const handleDragLeave = () => {
+        setIsDragging(false);
+    };
+
+    const handleDrop = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        const files = e.dataTransfer?.files;
+        if (files && files.length > 0) {
+            setSelectedAttachment(files[0]);
+        }
+    };
+
+    const handleAttachmentChange = (event) => {
+        const file = event.target.files?.[0];
+        if (file) {
+            setSelectedAttachment(file);
+        }
+    };
+
+    const clearSelectedAttachment = () => {
+        setSelectedAttachment(null);
+        if (chatFileInputRef.current) {
+            chatFileInputRef.current.value = '';
+        }
+    };
+
+    const sendMessage = async (e) => {
+        e.preventDefault();
+        if ((!inputMsg.trim() && !selectedAttachment) || !activeChatGroup || !socket || uploadingAttachment) return;
+
+        try {
+            let attachmentPayload = null;
+            if (selectedAttachment) {
+                setUploadingAttachment(true);
+                setChatActionMsg('Uploading attachment...');
+                const formData = new FormData();
+                formData.append('file', selectedAttachment);
+                
+                const token = localStorage.getItem('token');
+                const uploadRes = await axios.post(`${API_BASE}/api/chat/upload`, formData, {
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        'Content-Type': 'multipart/form-data',
+                    },
+                });
+                attachmentPayload = uploadRes.data?.attachment || null;
+            }
+
+            socket.emit('send_message', {
+                groupId: activeChatGroup,
+                message: inputMsg.trim(),
+                attachment: attachmentPayload,
+                token: localStorage.getItem('token')
+            });
+            setInputMsg('');
+            clearSelectedAttachment();
+            setChatActionMsg('');
+        } catch (_err) {
+            setChatActionMsg(_err.response?.data?.error || 'Failed to upload attachment.');
+            window.setTimeout(() => setChatActionMsg(''), 2500);
+        } finally {
+            setUploadingAttachment(false);
+        }
+    };
+
+    const handleJoinGroup = async (id) => {
+        setActiveChatGroup(id);
+        setUnreadRoomMessages(prev => ({ ...prev, [id]: 0 }));
+        // Already joined natively via socket init mapping
+        try {
+            const msgRes = await axios.get(`${API_BASE}/api/chat/groups/${id}/messages`, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
+            setChatMessages(msgRes.data.messages || []);
+        } catch (err) {}
+    };
 
     // Profile State
     const [profile, setProfile] = useState({ name: rawUsername, email: '', phone: '', bio: '', language: 'English', xp_points: 0 });
@@ -29,10 +299,23 @@ const Dashboard = () => {
     const [passwordLoading, setPasswordLoading] = useState(false);
     const [passwordMsg, setPasswordMsg] = useState('');
 
+    const [xpRulesOpen, setXpRulesOpen] = useState(false);
+
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape') setXpRulesOpen(false);
+        };
+        if (xpRulesOpen) {
+            window.addEventListener('keydown', handleKeyDown);
+        }
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [xpRulesOpen]);
+
     const [stats, setStats] = useState({ quiz: { total_quizzes: 0, total_score: 0, total_questions: 0 }, ai: { total_materials: 0 }, heatmap: [] });
     const [library, setLibrary] = useState([]);
     const [selectedMaterials, setSelectedMaterials] = useState([]);
     const [leaderboard, setLeaderboard] = useState([]);
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
     const [aiReport, setAiReport] = useState(null);
     const [aiReportLoading, setAiReportLoading] = useState(false);
@@ -114,18 +397,27 @@ const Dashboard = () => {
         e.preventDefault();
         setPasswordMsg('');
 
-        if (!passwordForm.currentPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+        const currentPassword = passwordForm.currentPassword.trim();
+        const newPassword = passwordForm.newPassword.trim();
+        const confirmPassword = passwordForm.confirmPassword.trim();
+
+        if (!currentPassword || !newPassword || !confirmPassword) {
             setPasswordMsg('Fill in all password fields.');
             return;
         }
 
-        if (passwordForm.newPassword.length < 8) {
-            setPasswordMsg('New password must be at least 8 characters long.');
+        if (newPassword !== confirmPassword) {
+            setPasswordMsg('New password and confirmation do not match.');
             return;
         }
 
-        if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-            setPasswordMsg('New password and confirmation do not match.');
+        if (currentPassword === newPassword) {
+            setPasswordMsg('New password must be different from current password.');
+            return;
+        }
+
+        if (!STRONG_PASSWORD_REGEX.test(newPassword)) {
+            setPasswordMsg('Use 8+ chars with uppercase, lowercase, number, and special symbol.');
             return;
         }
 
@@ -135,8 +427,8 @@ const Dashboard = () => {
             await axios.post(
                 `${API}/api/auth/change-password`,
                 {
-                    currentPassword: passwordForm.currentPassword,
-                    newPassword: passwordForm.newPassword
+                    currentPassword,
+                    newPassword
                 },
                 {
                     headers: token ? { Authorization: `Bearer ${token}` } : {}
@@ -174,9 +466,12 @@ const Dashboard = () => {
             btnHover: 'hover:bg-white/5'
         };
 
-    const renderNavButton = (id, icon, label) => (
+    const renderNavButton = (id, icon, label, closeMobile = false) => (
         <button
-            onClick={() => setActiveTab(id)}
+            onClick={() => {
+                setActiveTab(id);
+                if (closeMobile) setMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 active:scale-[0.98] ${
                 activeTab === id ? ui.btnActive : `text-current ${ui.btnHover}`
             }`}
@@ -185,6 +480,12 @@ const Dashboard = () => {
             <span className="font-semibold text-sm tracking-wide">{label}</span>
         </button>
     );
+
+    const memberDetail = selectedChatUser ? chatMembers.find(member => member.id === selectedChatUser.user_id || member.id === selectedChatUser.id) : null;
+    const userRank = memberDetail?.rank || null;
+    const userXP = selectedChatUser?.xp_points || memberDetail?.xp_points || 0;
+    const userStreak = selectedChatUser?.streak_count || memberDetail?.streak_count || 0;
+    const userBio = selectedChatUser?.bio || memberDetail?.bio || '';
 
     return (
         <div className={`min-h-screen flex overflow-hidden transition-colors duration-500 ${ui.bg} ${ui.text}`}>
@@ -216,6 +517,18 @@ const Dashboard = () => {
                         <span className="font-semibold text-sm tracking-wide">Study Planner (AI)</span>
                     </button>
 
+                                        <button
+                        onClick={() => { setActiveTab('chat'); setUnreadMessages(0); }}
+                        className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl transition-all duration-300 active:scale-[0.98] ${
+                            activeTab === 'chat' ? ui.btnActive : `text-current ${ui.btnHover}`
+                        }`}
+                    >
+                        <div className="flex items-center gap-3">
+                            <Users size={18} />
+                            <span className="font-semibold text-sm tracking-wide">Community Chat</span>
+                        </div>
+                        {unreadMessages > 0 && <span className="text-[10px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full">{unreadMessages}</span>}
+                    </button>
                     {renderNavButton('performance', <Target size={18} />, 'Performance')}
                     {renderNavButton('certificates', <Award size={18} />, 'Achievements')}
                     <div className="pt-6 pb-2 px-4">
@@ -236,14 +549,79 @@ const Dashboard = () => {
                 </div>
             </aside>
 
+            {mobileMenuOpen && (
+                <div className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onClick={() => setMobileMenuOpen(false)} />
+            )}
+
+            <aside className={`md:hidden fixed top-0 left-0 z-50 h-full w-[86%] max-w-sm p-5 transition-transform duration-300 ${ui.sidebar} ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center gap-3">
+                        <div className="rounded-2xl p-2.5 bg-gradient-to-tr from-cyan-500 to-blue-600 text-white shadow-[0_0_20px_rgba(6,182,212,0.4)]">
+                            <Sparkles size={20} />
+                        </div>
+                        <div>
+                            <h1 className="text-xl font-black tracking-tight">AskNLearn</h1>
+                            <p className={`text-[10px] uppercase tracking-widest ${ui.muted}`}>Student Portal</p>
+                        </div>
+                    </div>
+                    <button onClick={() => setMobileMenuOpen(false)} className="touch-target p-2 rounded-xl hover:bg-white/10 transition-colors">
+                        <X size={18} />
+                    </button>
+                </div>
+
+                <nav className="space-y-2">
+                    {renderNavButton('overview', <LayoutDashboard size={18} />, 'Overview', true)}
+                    {renderNavButton('leaderboard', <Star size={18} />, 'Leaderboard', true)}
+                    {renderNavButton('courses', <BookOpenCheck size={18} />, 'My Library', true)}
+                    <button
+                        onClick={() => { setMobileMenuOpen(false); navigate('/study-planner'); }}
+                        className={`touch-target w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 active:scale-[0.98] text-current ${ui.btnHover}`}
+                    >
+                        <Calendar size={18} />
+                        <span className="font-semibold text-sm tracking-wide">Study Planner (AI)</span>
+                    </button>
+                                        <button
+                        onClick={() => { setMobileMenuOpen(false); setActiveTab('chat'); setUnreadMessages(0); }}
+                        className={`touch-target w-full flex items-center justify-between gap-3 px-4 py-3 rounded-2xl transition-all duration-300 active:scale-[0.98] ${
+                            activeTab === 'chat' ? ui.btnActive : `text-current ${ui.btnHover}`
+                        }`}
+                    >
+                        <div className="flex items-center gap-3">
+                            <Users size={18} />
+                            <span className="font-semibold text-sm tracking-wide">Community Chat</span>
+                        </div>
+                        {unreadMessages > 0 && <span className="text-[10px] font-black bg-rose-500 text-white px-2 py-0.5 rounded-full">{unreadMessages}</span>}
+                    </button>
+                    {renderNavButton('performance', <Target size={18} />, 'Performance', true)}
+                    {renderNavButton('certificates', <Award size={18} />, 'Achievements', true)}
+                    {renderNavButton('settings', <Settings size={18} />, 'Profile & Settings', true)}
+                </nav>
+
+                <div className="mt-6 pt-5 border-t border-slate-200/20 dark:border-white/10 space-y-2">
+                    <button onClick={() => setTheme(lightMode ? 'dark' : 'light')} className={`touch-target w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-colors ${ui.btnHover} active:scale-95`}>
+                        {lightMode ? <Moon size={18} /> : <Sun size={18} />}
+                        <span className="font-semibold text-sm text-left flex-1">{lightMode ? 'Dark Mode' : 'Light Mode'}</span>
+                    </button>
+                    <button onClick={handleLogout} className="touch-target w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-rose-500 hover:bg-rose-500/10 transition-colors active:scale-95">
+                        <LogOut size={18} />
+                        <span className="font-semibold text-sm">Sign Out</span>
+                    </button>
+                </div>
+            </aside>
+
             {/* Main Content Area */}
             <main className="flex-1 h-screen overflow-y-auto relative z-10 scroll-smooth">
                 {/* Mobile Header */}
                 <header className={`md:hidden flex items-center justify-between p-5 border-b backdrop-blur-xl sticky top-0 z-30 transition-colors ${lightMode ? 'bg-white/80 border-slate-200' : 'bg-[#0f172a]/80 border-white/10'}`}>
                     <h1 className="text-xl font-black tracking-tight flex items-center gap-2"><Sparkles className="text-cyan-500" size={18} /> AskNLearn</h1>
-                    <button onClick={() => setTheme(lightMode ? 'dark' : 'light')} className="p-2 active:scale-90 transition-transform">
-                        {lightMode ? <Moon size={18} /> : <Sun size={18} />}
-                    </button>
+                    <div className="flex items-center gap-1">
+                        <button onClick={() => setTheme(lightMode ? 'dark' : 'light')} className="touch-target p-2 active:scale-90 transition-transform">
+                            {lightMode ? <Moon size={18} /> : <Sun size={18} />}
+                        </button>
+                        <button onClick={() => setMobileMenuOpen(true)} className="touch-target p-2 rounded-xl hover:bg-white/10 transition-colors">
+                            <Menu size={18} />
+                        </button>
+                    </div>
                 </header>
 
                 <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-8 animate-[fadeIn_0.5s_ease-out]">
@@ -256,7 +634,7 @@ const Dashboard = () => {
                                 {profile.name ? profile.name.split(' ')[0] : 'Student'}! 👋
                             </h2>
                         </div>
-                        <div className="flex items-center gap-4">
+                        <div className="flex flex-wrap items-center gap-4">
                             <div className={`px-4 py-3 rounded-[2rem] flex items-center gap-3 transition-all hover:-translate-y-1 hover:shadow-lg ${ui.card}`}>
                                 <div className="bg-orange-500/10 p-2 rounded-xl border border-orange-500/20">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none" className="text-orange-500 drop-shadow-[0_0_10px_rgba(249,115,22,0.5)]"><path d="M12 2c0 0-4.5 4.5-5 9.5C6.5 16 8.5 22 12 22s5.5-6 5-10.5C16.5 6.5 12 2 12 2zM12 19c-1.5 0-2.5-1.5-2.5-3 0-2 2-4 2-4s1 1 1 2.5C12.5 16 13.5 17.5 12 19z"/></svg>
@@ -266,13 +644,30 @@ const Dashboard = () => {
                                     <p className="text-xl font-black text-orange-500">{profile.streak_count || 0} <span className="text-sm font-semibold opacity-50">Days</span></p>
                                 </div>
                             </div>
-                            <div className={`px-5 py-3 rounded-[2rem] flex items-center gap-4 transition-all hover:-translate-y-1 hover:shadow-lg ${ui.card}`}>
+                            <div 
+                                onClick={() => setXpRulesOpen(true)}
+                                className={`px-5 py-3 rounded-[2rem] flex items-center gap-4 transition-all hover:-translate-y-1 hover:shadow-lg cursor-pointer hover:border-amber-500/30 ${ui.card}`}
+                                title="Click to view XP earning rules & ranks"
+                            >
                                 <div className="bg-amber-500/10 p-2 rounded-xl border border-amber-500/20">
                                     <Trophy className="text-amber-500 drop-shadow-[0_0_10px_rgba(245,158,11,0.5)]" size={24} />
                                 </div>
                                 <div>
                                     <p className={`text-xs font-bold uppercase tracking-wider ${ui.muted}`}>Total XP</p>
                                     <p className="text-xl font-black text-amber-500">{profile.xp_points || 0} <span className="text-sm font-semibold opacity-50">Pts</span></p>
+                                </div>
+                            </div>
+                            <div 
+                                onClick={() => setXpRulesOpen(true)}
+                                className={`px-5 py-3 rounded-[2rem] flex items-center gap-4 transition-all hover:-translate-y-1 hover:shadow-lg cursor-pointer hover:border-purple-500/30 ${ui.card}`}
+                                title="Click to view XP earning rules & ranks"
+                            >
+                                <div className="bg-purple-500/10 p-2 rounded-xl border border-purple-500/20">
+                                    <Shield className="text-purple-500 drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" size={24} />
+                                </div>
+                                <div>
+                                    <p className={`text-xs font-bold uppercase tracking-wider ${ui.muted}`}>Level</p>
+                                    <p className="text-xl font-black text-purple-500">{Math.floor((profile.xp_points || 0) / 100) + 1}</p>
                                 </div>
                             </div>
                         </div>
@@ -312,6 +707,308 @@ const Dashboard = () => {
                         </div>
                     )}
 
+                    
+                    {/* COMMUNITY CHAT TAB */}
+                    {activeTab === 'chat' && (
+                        <div className="space-y-6 animate-[fadeIn_0.5s_ease-out] flex flex-col h-[calc(100vh-140px)]">
+                            <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-3 bg-cyan-500/10 text-cyan-500 rounded-xl"><Users size={24}/></div>
+                                    <h2 className="text-3xl font-black tracking-tight">Community Chat</h2>
+                                </div>
+                            </div>
+                            
+                            <div 
+                                onDragOver={handleDragOver}
+                                onDragLeave={handleDragLeave}
+                                onDrop={handleDrop}
+                                onPaste={handlePaste}
+                                className={`flex-1 rounded-[2rem] flex overflow-hidden border shadow-lg relative ${lightMode ? 'bg-white border-slate-200' : 'bg-black/30 border-white/10'}`}
+                            >
+                                {isDragging && (
+                                    <div className="absolute inset-0 bg-cyan-500/10 backdrop-blur-sm border-2 border-dashed border-cyan-500 z-40 rounded-[2rem] flex flex-col items-center justify-center pointer-events-none">
+                                        <div className="bg-cyan-500 text-white p-4 rounded-full shadow-lg animate-bounce">
+                                            <Paperclip size={32} />
+                                        </div>
+                                        <p className="mt-4 font-black text-lg text-cyan-500">Drop files here to attach</p>
+                                    </div>
+                                )}
+                                <div className={`w-32 md:w-56 flex flex-col border-r ${lightMode ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.01]'}`}>
+                                    <div className="p-4 border-b border-transparent dark:border-white/5">
+                                        <p className={`text-xs font-bold uppercase tracking-widest ${ui.muted}`}>Rooms</p>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                                        {chatGroups.map(g => (
+                                            <button 
+                                                key={g.id} onClick={() => handleJoinGroup(g.id)}
+                                                className={`w-full text-left px-3 py-3 rounded-xl transition flex items-center justify-between ${activeChatGroup === g.id ? 'bg-cyan-500/10 text-cyan-500 dark:text-cyan-400 font-bold' : `text-slate-500 hover:bg-black/5 dark:hover:bg-white/5`}`}
+                                            >
+                                                <span className="text-sm truncate"># {g.name}</span>
+                                                {unreadRoomMessages[g.id] > 0 && <span className="bg-rose-500 text-white text-[10px] w-5 h-5 flex items-center justify-center rounded-full font-black animate-bounce">{unreadRoomMessages[g.id]}</span>}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="flex-1 flex flex-col relative">
+                                    <div className={`flex-1 overflow-y-auto p-6 space-y-4`}>
+                                        {chatMessages.map((m, idx) => {
+                                            const isMe = String(m.user_id) === String(userId);
+                                            const isAdmin = m.role === 'admin';
+                                            return (
+                                                <div key={m.id || idx} className={`flex flex-col max-w-[80%] ${isMe ? 'ml-auto items-end' : 'items-start'}`}>
+                                                    <span 
+                                                        onClick={() => !isMe && setSelectedChatUser(m)}
+                                                        className={`text-[11px] font-bold mb-1 px-1 cursor-pointer hover:underline flex items-center gap-1 ${isAdmin ? 'text-amber-500' : 'text-slate-400'}`}
+                                                    >
+                                                        {isAdmin && <Shield size={10} />}
+                                                        {isMe ? 'You' : m.username}
+                                                    </span>
+                                                    <div className={`group flex items-start gap-2 px-4 py-2.5 text-sm ${isMe ? 'bg-cyan-500 text-white rounded-2xl rounded-tr-sm shadow-md shadow-cyan-500/20' : isAdmin ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20 rounded-2xl rounded-tl-sm' : lightMode ? 'bg-slate-100 text-slate-800 rounded-2xl rounded-tl-sm' : 'bg-white/10 text-slate-200 border border-white/5 rounded-2xl rounded-tl-sm'}`}>
+                                                        <div className="min-w-0 space-y-2">
+                                                            {!!m.message && <p className="break-words whitespace-pre-wrap">{m.message}</p>}
+                                                            {m.attachment_url && (
+                                                                <div className="space-y-2">
+                                                                    {String(m.attachment_type || '').startsWith('image/') && (
+                                                                        <a href={m.attachment_url} target="_blank" rel="noreferrer">
+                                                                            <img src={m.attachment_url} alt={m.attachment_name || 'attachment'} className="max-h-64 rounded-2xl border border-white/10 object-cover" />
+                                                                        </a>
+                                                                    )}
+                                                                    {String(m.attachment_type || '').startsWith('video/') && (
+                                                                        <video controls src={m.attachment_url} className="max-h-72 rounded-2xl border border-white/10" />
+                                                                    )}
+                                                                    {String(m.attachment_type || '').startsWith('audio/') && (
+                                                                        <audio controls src={m.attachment_url} className="max-w-full" />
+                                                                    )}
+                                                                    {!String(m.attachment_type || '').startsWith('image/')
+                                                                        && !String(m.attachment_type || '').startsWith('video/')
+                                                                        && !String(m.attachment_type || '').startsWith('audio/') && (
+                                                                        <a href={m.attachment_url} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-3 py-3 text-white">
+                                                                            <FileText size={18} />
+                                                                            <span className="min-w-0 flex-1 truncate">{m.attachment_name || 'Attachment'}</span>
+                                                                        </a>
+                                                                    )}
+                                                                    <a href={m.attachment_url} target="_blank" rel="noreferrer" className={`inline-flex items-center gap-2 text-xs font-bold underline-offset-4 hover:underline ${isMe ? 'text-white' : isAdmin ? 'text-amber-400' : 'text-cyan-300'}`}>
+                                                                        Open {m.attachment_name || 'attachment'} {m.attachment_size ? `(${formatAttachmentSize(m.attachment_size)})` : ''}
+                                                                    </a>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )
+                                        })}
+                                        <div ref={messagesEndRef} />
+                                    </div>
+                                    <div className={`p-4 border-t ${lightMode ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/40'} relative`}>
+                                        
+                                        {/* Chat Action Feedback Banner */}
+                                        {chatActionMsg && (
+                                            <div className="absolute -top-10 left-4 right-4 bg-cyan-500 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-lg">
+                                                {chatActionMsg}
+                                            </div>
+                                        )}
+
+                                        {/* Floating Attachment Category Picker Popover */}
+                                        {attachmentMenuOpen && (
+                                            <div className="absolute bottom-20 left-4 z-30 p-3 rounded-2xl border border-white/10 shadow-2xl flex flex-col gap-1.5 backdrop-blur-xl bg-slate-900/95 text-white shadow-black/80">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => triggerFileSelect('image/*,video/*')}
+                                                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-cyan-500/10 rounded-xl transition text-left text-sm font-semibold w-48 text-white"
+                                                >
+                                                    <Image size={16} className="text-rose-500" />
+                                                    <span>Photos & Videos</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => triggerFileSelect('.pdf,.doc,.docx,.txt,.xls,.xlsx,.ppt,.pptx,.zip,.rar')}
+                                                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-cyan-500/10 rounded-xl transition text-left text-sm font-semibold w-48 text-white"
+                                                >
+                                                    <FileText size={16} className="text-blue-500" />
+                                                    <span>Documents</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => triggerFileSelect('audio/*')}
+                                                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-cyan-500/10 rounded-xl transition text-left text-sm font-semibold w-48 text-white"
+                                                >
+                                                    <Music size={16} className="text-purple-500" />
+                                                    <span>Audio Files</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => triggerFileSelect('*')}
+                                                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-cyan-500/10 rounded-xl transition text-left text-sm font-semibold w-48 text-white"
+                                                >
+                                                    <Folder size={16} className="text-amber-500" />
+                                                    <span>Universal File</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setAttachmentMenuOpen(false);
+                                                        startRecording();
+                                                    }}
+                                                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-cyan-500/10 rounded-xl transition text-left text-sm font-semibold w-48 text-white"
+                                                >
+                                                    <Mic size={16} className="text-emerald-500" />
+                                                    <span>Voice Note</span>
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {selectedAttachment && (
+                                            <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
+                                                <div className="flex items-center gap-3 min-w-0">
+                                                    {attachmentPreviewUrl ? (
+                                                        <img src={attachmentPreviewUrl} alt="preview" className="w-10 h-10 rounded-xl object-cover border border-white/10 shrink-0" />
+                                                    ) : selectedAttachment.type.startsWith('audio/') ? (
+                                                        <div className="w-10 h-10 rounded-xl bg-cyan-500/10 text-cyan-500 flex items-center justify-center shrink-0"><Music size={16} /></div>
+                                                    ) : selectedAttachment.type.startsWith('video/') ? (
+                                                        <div className="w-10 h-10 rounded-xl bg-cyan-500/10 text-cyan-500 flex items-center justify-center shrink-0"><Video size={16} /></div>
+                                                    ) : (
+                                                        <div className="w-10 h-10 rounded-xl bg-cyan-500/10 text-cyan-500 flex items-center justify-center shrink-0"><FileText size={16} /></div>
+                                                    )}
+                                                    <div className="min-w-0">
+                                                        <p className="truncate font-semibold text-xs text-white">{selectedAttachment.name}</p>
+                                                        <p className="text-[10px] opacity-70">{formatAttachmentSize(selectedAttachment.size)}</p>
+                                                    </div>
+                                                </div>
+                                                <button type="button" onClick={clearSelectedAttachment} className="rounded-xl p-2 hover:bg-white/10 shrink-0">
+                                                    <X size={16} />
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        <form onSubmit={sendMessage} className="flex gap-2">
+                                            <input ref={chatFileInputRef} type="file" accept={fileAccept} onChange={handleAttachmentChange} className="hidden" />
+                                            
+                                            <button 
+                                                type="button" 
+                                                onClick={() => setAttachmentMenuOpen(!attachmentMenuOpen)} 
+                                                className={`rounded-2xl px-4 py-3 transition hover:bg-white/10 ${
+                                                    attachmentMenuOpen ? 'bg-cyan-500 text-white hover:bg-cyan-600' : 'bg-white/5 text-slate-300'
+                                                }`} 
+                                                title="Attach file / record audio"
+                                            >
+                                                <Paperclip size={18} />
+                                            </button>
+
+                                            {isRecording ? (
+                                                <div className="flex-1 flex items-center justify-between bg-red-500/10 border border-red-500/20 px-5 py-3 rounded-2xl text-red-500">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-ping" />
+                                                        <span className="font-bold text-xs uppercase tracking-wider">Recording voice note...</span>
+                                                        <span className="font-mono text-sm opacity-80">{formatDuration(recordingDuration)}</span>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <button 
+                                                            type="button" 
+                                                            onClick={cancelRecording}
+                                                            className="px-3 py-1.5 text-xs font-bold border border-red-500/30 hover:bg-red-500/20 rounded-xl transition"
+                                                        >
+                                                            Cancel
+                                                        </button>
+                                                        <button 
+                                                            type="button" 
+                                                            onClick={stopRecording}
+                                                            className="px-3 py-1.5 text-xs font-bold bg-red-500 text-white hover:bg-red-600 rounded-xl transition shadow-lg shadow-red-500/25"
+                                                        >
+                                                            Done
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <input 
+                                                        type="text" value={inputMsg} onChange={(e) => setInputMsg(e.target.value)}
+                                                        placeholder="Type your message..."
+                                                        className={`flex-1 rounded-2xl px-5 py-3 text-sm focus:outline-none transition ${ui.input} focus:ring-2 focus:ring-cyan-500/50`}
+                                                    />
+                                                    <button type="submit" disabled={!inputMsg.trim() && !selectedAttachment} className="bg-cyan-500 hover:bg-cyan-600 disabled:opacity-50 disabled:bg-slate-400 text-white p-3 px-5 rounded-2xl transition shadow-lg shadow-cyan-500/20"><Send size={18} /></button>
+                                                </>
+                                            )}
+                                        </form>
+                                    </div>
+                                </div>
+
+                                {/* Right Sidebar - Group Members */}
+                                <div className={`hidden lg:flex w-48 md:w-60 flex-col border-l shrink-0 ${lightMode ? 'border-slate-200 bg-slate-50' : 'border-white/10 bg-white/[0.01]'}`}>
+                                    <div className="p-4 border-b border-transparent dark:border-white/5 flex items-center justify-between">
+                                        <p className={`text-xs font-bold uppercase tracking-widest ${ui.muted}`}>Group Members</p>
+                                        <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-500 font-bold">{chatMembers.length}</span>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                                        {chatMembers.map(member => {
+                                            const isAdmin = member.role === 'admin';
+                                            const isMe = String(member.id) === String(userId) && member.role !== 'admin';
+                                            return (
+                                                <button 
+                                                    key={`${member.role}-${member.id}`}
+                                                    onClick={() => setSelectedChatUser(member)}
+                                                    className="w-full text-left px-3 py-2.5 rounded-xl transition flex items-center gap-3 hover:bg-black/5 dark:hover:bg-white/5 group border border-transparent"
+                                                >
+                                                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white shrink-0 ${isAdmin ? 'bg-amber-500' : 'bg-cyan-500'}`}>
+                                                        {isAdmin ? <Shield size={14} /> : member.name.charAt(0).toUpperCase()}
+                                                    </div>
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="flex items-center justify-between gap-1.5">
+                                                            <span className={`text-xs font-bold truncate ${isAdmin ? 'text-amber-500' : lightMode ? 'text-slate-800' : 'text-slate-200'} group-hover:underline`}>
+                                                                {member.name} {isMe && "(You)"}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-[9px] text-slate-500 font-semibold truncate">
+                                                            {isAdmin ? 'Staff Administrator' : `Rank #${member.rank} • ${member.xp_points} XP`}
+                                                        </p>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Profile Modal Overlay */}
+                            {selectedChatUser && (
+                                <div className="fixed inset-0 z-50 flex items-center justify-center p-5 bg-black/60 backdrop-blur-sm" onClick={() => setSelectedChatUser(null)}>
+                                    <div className={`max-w-xs w-full p-8 rounded-[2rem] border shadow-2xl relative ${selectedChatUser.role === 'admin' ? 'bg-gradient-to-b from-amber-500/20 to-black/90 border-amber-500/50' : 'bg-[#0f172a] border-white/10'}`} onClick={e => e.stopPropagation()}>
+                                        <button onClick={() => setSelectedChatUser(null)} className="absolute top-4 right-4 p-2 rounded-xl bg-white/5 hover:bg-white/10 text-white transition"><X size={16}/></button>
+                                        
+                                        <div className={`mx-auto w-20 h-20 rounded-2xl mb-4 flex items-center justify-center border-2 border-white/20 shadow-lg ${selectedChatUser.role === 'admin' ? 'bg-amber-500 text-white' : 'bg-cyan-500 text-white'}`}>
+                                            {selectedChatUser.role === 'admin' ? <Shield size={32}/> : <User size={32}/>}
+                                        </div>
+                                        
+                                        <h3 className="text-xl font-black text-center text-white flex items-center justify-center gap-2">
+                                            {selectedChatUser.name || selectedChatUser.username}
+                                            {selectedChatUser.role === 'admin' && <span className="text-[10px] uppercase font-black tracking-wider bg-amber-500 text-black px-2 py-0.5 rounded-md">Admin</span>}
+                                        </h3>
+                                        
+                                        <div className="grid grid-cols-3 gap-2 mt-8">
+                                            <div className="text-center p-2 bg-white/5 rounded-xl border border-white/5">
+                                                <p className="text-lg font-black text-cyan-400">#{userRank || 'N/A'}</p>
+                                                <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">Rank</p>
+                                            </div>
+                                            <div className="text-center p-2 bg-white/5 rounded-xl border border-white/5">
+                                                <p className="text-lg font-black text-amber-500">{userXP}</p>
+                                                <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">XP</p>
+                                            </div>
+                                            <div className="text-center p-2 bg-white/5 rounded-xl border border-white/5">
+                                                <p className="text-lg font-black text-orange-500">🔥 {userStreak}</p>
+                                                <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">Streak</p>
+                                            </div>
+                                        </div>
+                                        {userBio && (
+                                            <div className="mt-6 p-4 rounded-2xl bg-white/5 border border-white/5 text-center">
+                                                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">About</p>
+                                                <p className="text-xs text-slate-300 italic">"{userBio}"</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {/* LEADERBOARD TAB */}
                     {activeTab === 'leaderboard' && (
                         <div className="space-y-6 animate-[fadeIn_0.5s_ease-out]">
@@ -320,11 +1017,13 @@ const Dashboard = () => {
                                 <h2 className="text-3xl font-black tracking-tight">Global Leaderboard</h2>
                             </div>
                             <div className={`rounded-[2rem] overflow-hidden shadow-lg ${ui.card}`}>
-                                <table className="w-full text-left">
+                                <div className="overflow-x-auto">
+                                <table className="w-full text-left min-w-[640px]">
                                     <thead className={`bg-black/5 dark:bg-white/5 text-xs uppercase font-bold tracking-wider border-b border-black/10 dark:border-white/10 ${ui.muted}`}>
                                         <tr>
                                             <th className="p-5 w-20 text-center">Rank</th>
                                             <th className="p-5">Student</th>
+                                            <th className="p-5 text-center">Level</th>
                                             <th className="p-5 text-center">Streak</th>
                                             <th className="p-5 text-right w-40">Total XP</th>
                                         </tr>
@@ -343,12 +1042,19 @@ const Dashboard = () => {
                                                         {user.name}
                                                     </div>
                                                 </td>
+                                                <td className="p-5 text-center">
+                                                    <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-500/10 border border-purple-500/20 text-purple-500 dark:text-purple-400 text-sm font-black rounded-xl">
+                                                        <Shield size={14} className="fill-purple-500/10" />
+                                                        Lvl {Math.floor((user.xp_points || 0) / 100) + 1}
+                                                    </span>
+                                                </td>
                                                 <td className="p-5 text-center font-bold text-orange-500 text-lg">{user.streak_count || 0} 🔥</td>
                                                 <td className="p-5 text-right font-black text-amber-500 text-lg">{user.xp_points || 0} Pts</td>
                                             </tr>
                                         ))}
                                     </tbody>
                                 </table>
+                                </div>
                                 {leaderboard.length === 0 && (
                                     <p className={`p-10 text-center font-bold ${ui.muted}`}>No warriors on the leaderboard yet. Start answering quizzes!</p>
                                 )}
@@ -408,6 +1114,7 @@ const Dashboard = () => {
                             <form onSubmit={handleChangePassword} className={`rounded-[2rem] p-6 md:p-8 space-y-5 hover:shadow-lg transition-all ${ui.card}`}>
                                 <h3 className="text-lg font-bold flex items-center gap-2 mb-4 border-b border-white/5 pb-4"><Shield className="text-rose-500" size={20} /> Security Settings</h3>
                                 <p className={`text-sm ${ui.muted}`}>Change your password using your current login credentials.</p>
+                                <p className={`text-xs ${ui.muted}`}>Password policy: minimum 8 characters with uppercase, lowercase, number, and special symbol.</p>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <div className="group">
                                         <label className={`block text-xs font-bold uppercase tracking-wider mb-2 ${ui.muted}`}>Current Password</label>
@@ -655,7 +1362,14 @@ const Dashboard = () => {
                                         </div>
 
                                         <h3 className="text-4xl font-black tracking-widest uppercase mb-2 text-white drop-shadow-md">{tier}</h3>
-                                        <p className="text-xl font-bold text-white/70 mb-8">{xp} XP Earned</p>
+                                        
+                                        <div className="flex items-center gap-4 mb-8">
+                                            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-500/20 border border-purple-500/30 text-purple-400 text-sm font-black rounded-xl">
+                                                <Shield size={16} className="fill-purple-500/10" />
+                                                Level {Math.floor(xp / 100) + 1}
+                                            </span>
+                                            <span className="text-xl font-bold text-white/70">{xp} XP Earned</span>
+                                        </div>
 
                                         {nextTier > 0 && (
                                             <div className="w-full max-w-md relative z-10">
@@ -675,6 +1389,195 @@ const Dashboard = () => {
                     )}
                 </div>
             </main>
+
+            {xpRulesOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    {/* Backdrop overlay */}
+                    <div 
+                        className="absolute inset-0 bg-black/60 backdrop-blur-md transition-opacity duration-300"
+                        onClick={() => setXpRulesOpen(false)}
+                    />
+                    
+                    {/* Modal content */}
+                    <div className={`relative w-full max-w-2xl rounded-[2.5rem] border shadow-2xl p-6 md:p-8 overflow-hidden z-10 transition-all duration-300 scale-100 ${
+                        lightMode 
+                            ? 'bg-white/95 border-slate-200 text-slate-900 shadow-slate-200/50' 
+                            : 'bg-[#0f172a]/95 border-white/10 text-white shadow-black/80'
+                    }`}>
+                        {/* Background glowing gradients */}
+                        <div className="absolute -top-40 -right-40 w-80 h-80 bg-amber-500/10 rounded-full blur-[100px] pointer-events-none" />
+                        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-purple-500/10 rounded-full blur-[100px] pointer-events-none" />
+                        
+                        {/* Header */}
+                        <div className="flex items-center justify-between pb-5 border-b border-slate-200/20 mb-6 relative z-10">
+                            <div className="flex items-center gap-3">
+                                <div className="p-3 bg-amber-500/20 rounded-2xl text-amber-500 animate-pulse">
+                                    <Trophy size={24} />
+                                </div>
+                                <div>
+                                    <h3 className="text-2xl font-black tracking-tight">XP Rules &amp; Rank Tiers</h3>
+                                    <p className={`text-xs font-semibold uppercase tracking-wider ${lightMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                                        Learn how to level up your score
+                                    </p>
+                                </div>
+                            </div>
+                            <button 
+                                onClick={() => setXpRulesOpen(false)}
+                                className={`p-2 rounded-xl border transition-all ${
+                                    lightMode 
+                                        ? 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-500' 
+                                        : 'bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white'
+                                }`}
+                            >
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        {/* Rules list */}
+                        <div className="space-y-6 max-h-[60vh] overflow-y-auto pr-2 relative z-10">
+                            {/* How to Earn */}
+                            <div>
+                                <h4 className="text-xs font-bold uppercase tracking-widest text-amber-500 mb-3">How to Earn XP</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {/* CS Quiz */}
+                                    <div className={`p-5 rounded-2xl border ${lightMode ? 'bg-slate-50/50 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className="text-lg">🎓</span>
+                                            <h5 className="font-bold text-sm">CS Quiz Master</h5>
+                                        </div>
+                                        <ul className="space-y-2.5 text-xs font-medium">
+                                            <li className="flex items-center justify-between">
+                                                <span className="opacity-70">Correct MCQ Answer</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">+10 XP</span>
+                                            </li>
+                                            <li className="flex items-center justify-between">
+                                                <span className="opacity-70">Incorrect Penalty (Exam Mode)</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">-1 XP</span>
+                                            </li>
+                                            <li className="flex items-center justify-between">
+                                                <span className="opacity-70">Incorrect Penalty (Practice)</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-500/10 text-slate-400 border border-slate-500/10">0 XP</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+
+                                    {/* AI Module */}
+                                    <div className={`p-5 rounded-2xl border ${lightMode ? 'bg-slate-50/50 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <span className="text-lg">🤖</span>
+                                            <h5 className="font-bold text-sm">AI Study Tools</h5>
+                                        </div>
+                                        <ul className="space-y-2.5 text-xs font-medium">
+                                            <li className="flex items-center justify-between">
+                                                <span className="opacity-70">Generate Study Material</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">+20 XP</span>
+                                            </li>
+                                            <li className="flex items-center justify-between">
+                                                <span className="opacity-70">Ask Socratic Tutor Question</span>
+                                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">+5 XP</span>
+                                            </li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Level Up System */}
+                            <div className={`p-5 rounded-2xl border ${lightMode ? 'bg-slate-50/50 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                <h4 className="text-xs font-bold uppercase tracking-widest text-purple-400 mb-2">Level Up Progression</h4>
+                                <p className="text-xs font-medium opacity-80 leading-relaxed">
+                                    Levels are calculated directly from your total XP. You level up for every <span className="font-bold text-amber-500">100 XP</span> earned. Keep exploring AI Study Tools and answering quizzes to unlock higher ranks!
+                                </p>
+                            </div>
+
+                            {/* Rank Tiers */}
+                            <div>
+                                <h4 className="text-xs font-bold uppercase tracking-widest text-amber-500 mb-3">AskNLearn Rank Tiers</h4>
+                                <div className="space-y-2">
+                                    {/* Bronze Novice */}
+                                    <div className={`flex items-center justify-between p-3.5 rounded-xl border ${lightMode ? 'bg-slate-50/30 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-orange-500/20 rounded-lg text-orange-500">
+                                                <Star size={16} />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold">Bronze Novice</p>
+                                                <p className="text-[10px] opacity-50">Starting point for all new learners</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-bold text-orange-400">0 - 99 XP</span>
+                                    </div>
+
+                                    {/* Silver Scholar */}
+                                    <div className={`flex items-center justify-between p-3.5 rounded-xl border ${lightMode ? 'bg-slate-50/30 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-slate-400/20 rounded-lg text-slate-400">
+                                                <Star size={16} />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold">Silver Scholar</p>
+                                                <p className="text-[10px] opacity-50">Unlock at level 2</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-bold text-slate-400">100+ XP</span>
+                                    </div>
+
+                                    {/* Gold Master */}
+                                    <div className={`flex items-center justify-between p-3.5 rounded-xl border ${lightMode ? 'bg-slate-50/30 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-yellow-400/20 rounded-lg text-yellow-400">
+                                                <Star size={16} />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold">Gold Master</p>
+                                                <p className="text-[10px] opacity-50">Unlock at level 6</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-bold text-yellow-400">500+ XP</span>
+                                    </div>
+
+                                    {/* Platinum Prodigy */}
+                                    <div className={`flex items-center justify-between p-3.5 rounded-xl border ${lightMode ? 'bg-slate-50/30 border-slate-100' : 'bg-white/5 border-white/5'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-slate-200/20 rounded-lg text-slate-200">
+                                                <Star size={16} />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold">Platinum Prodigy</p>
+                                                <p className="text-[10px] opacity-50">Unlock at level 16</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-bold text-slate-200">1,500+ XP</span>
+                                    </div>
+
+                                    {/* Diamond Legend */}
+                                    <div className={`flex items-center justify-between p-3.5 rounded-xl border bg-gradient-to-r from-cyan-500/10 to-transparent ${lightMode ? 'border-cyan-200/50' : 'border-cyan-500/20'}`}>
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-cyan-400/20 rounded-lg text-cyan-400 drop-shadow-[0_0_8px_rgba(34,211,238,0.4)]">
+                                                <Star size={16} fill="currentColor" />
+                                            </div>
+                                            <div>
+                                                <p className="text-sm font-bold text-cyan-400 drop-shadow-sm">Diamond Legend</p>
+                                                <p className="text-[10px] opacity-50">Unlock at level 51 - Ultimate Learner</p>
+                                            </div>
+                                        </div>
+                                        <span className="text-xs font-bold text-cyan-400">5,000+ XP</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Footer */}
+                        <div className="flex justify-end pt-5 border-t border-slate-200/20 mt-6 relative z-10">
+                            <button
+                                onClick={() => setXpRulesOpen(false)}
+                                className="px-6 py-2.5 rounded-xl font-bold bg-gradient-to-r from-amber-500 to-yellow-500 text-black hover:from-amber-400 hover:to-yellow-400 shadow-lg shadow-amber-500/20 active:scale-95 transition-all text-xs"
+                            >
+                                Got it, Thanks!
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

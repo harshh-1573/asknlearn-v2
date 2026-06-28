@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { API_BASE } from '../config/api';
 import { ArrowLeft, Bot, Boxes, Loader2, Send, Sparkles, Volume2 } from 'lucide-react';
 
-const API = 'http://localhost:5000';
+const API = API_BASE;
 
 const WorkspaceChat = () => {
     const navigate = useNavigate();

@@ -17,6 +17,20 @@ body,
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
 body {
   background-color: var(--bg-dark);
   color: #f8fafc;

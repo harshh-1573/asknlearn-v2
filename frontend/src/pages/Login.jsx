@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
+import { API_BASE } from '../config/api';
 import { BookOpen, Lock, Mail, Loader2, BrainCircuit, Sparkles, MessageSquareMore, ArrowLeft } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -23,7 +24,7 @@ const Login = () => {
                 newPassword: password.trim()
             };
 
-            const res = await axios.post('http://localhost:5000/api/auth/reset-password', payload);
+            const res = await axios.post(`${API_BASE}/api/auth/reset-password`, payload);
 
             if (res.data.success || res.status === 200) {
                 setResetSuccess(true);
@@ -51,7 +52,7 @@ const Login = () => {
                 password: password.trim()
             };
 
-            const res = await axios.post('http://localhost:5000/api/auth/login', payload);
+            const res = await axios.post(`${API_BASE}/api/auth/login`, payload);
 
             if (res.data.token) {
                 localStorage.setItem('token', res.data.token);

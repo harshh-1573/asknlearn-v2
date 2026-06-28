@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
+import { API_BASE } from '../config/api';
 import { ArrowLeft, BookOpen, Loader2, Lock, Mail, User2, BrainCircuit, Sparkles, MessageSquareMore } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -47,7 +48,7 @@ const Register = () => {
 
         setLoading(true);
         try {
-            await axios.post('http://localhost:5000/api/auth/signup', payload);
+            await axios.post(`${API_BASE}/api/auth/signup`, payload);
             setSuccess('Registration successful. Redirecting to login...');
             setTimeout(() => navigate('/login'), 1500);
         } catch (err) {
