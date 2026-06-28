@@ -11,7 +11,7 @@ module.exports = ({
     ensureAiChatHistoryTable,
 }) => {
     const router = express.Router();
-    const pythonServiceUrl = process.env.AI_PYTHON_URL || 'http://localhost:8000';
+    const pythonServiceUrl = process.env.AI_PYTHON_URL || process.env.PYTHON_API_URL || 'http://localhost:8000';
 
     router.post('/process', upload.any(), async (req, res) => {
         const {
