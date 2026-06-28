@@ -346,86 +346,53 @@ const AIStudy = () => {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
 
-            const taskId = res.data?.task_id;
-            if (!taskId) throw new Error('Failed to start AI task');
+            if (res.data?.status !== 'success') {
+                throw new Error(res.data?.error || 'AI generation failed');
+            }
 
-            const checkStatus = async () => {
-                try {
-                    const statusRes = await axios.get(`${API}/api/ai/status/${taskId}`);
-                    const task = statusRes.data;
-                    
-                    if (task.status === 'error') {
-                        throw new Error(task.error || 'AI generation failed');
-                    } else if (task.status === 'completed') {
-                        const data = task.result?.data || {};
-                        const resolvedName = res.data?.sourceName || 'Generated Material';
-                        const resolvedText = task.result?.source_text || sourceText || '';
-                        
-                        setGenerated(data);
-                        setActiveName(resolvedName);
-                        setActiveContent(resolvedText);
-                        setChat([]);
-                        setGuessInputs({});
-                        setFlashcardFlip({});
-                        setMcqFeedback({});
-                        setFillFeedback({});
-                        setFillHints({});
-                        setTfFeedback({});
-                        setYnFeedback({});
-                        setWhReveal({});
-                        setModelUsed(task.result?.model_used || '');
+            const data = res.data?.data || {};
+            const resolvedName = res.data?.sourceName || 'Generated Material';
+            const resolvedText = res.data?.sourceText || sourceText || '';
+            const autoId = res.data?.materialId || null;
+            const autoSaved = Boolean(autoId);
 
-                        let autoId = null;
-                        let autoSaved = false;
-                        if (res.data?.autoSave) {
-                            try {
-                                const saveRes = await axios.post(`${API}/api/ai/save-material`, {
-                                    userId,
-                                    subjectId: res.data?.subjectId || null,
-                                    sourceName: resolvedName,
-                                    filename: file?.name || null,
-                                    sourceText: resolvedText,
-                                    generatedData: data,
-                                });
-                                autoId = saveRes.data?.materialId || null;
-                                setActiveId(autoId);
-                                autoSaved = true;
-                            } catch (saveErr) {
-                                console.error('Autosave failed:', saveErr);
-                            }
-                        }
+            setGenerated(data);
+            setActiveName(resolvedName);
+            setActiveContent(resolvedText);
+            setChat([]);
+            setGuessInputs({});
+            setFlashcardFlip({});
+            setMcqFeedback({});
+            setFillFeedback({});
+            setFillHints({});
+            setTfFeedback({});
+            setYnFeedback({});
+            setWhReveal({});
+            setModelUsed(res.data?.modelUsed || '');
 
-                        if (autoSaved) {
-                            setSavedBanner('Task completed and saved to library!');
-                        } else {
-                            setSavedBanner('Generation complete!');
-                        }
+            if (autoId) {
+                setActiveId(autoId);
+            }
 
-                        persistActive({
-                            id: autoId,
-                            sourceName: resolvedName,
-                            content: resolvedText,
-                            data,
-                        });
+            if (autoSaved) {
+                setSavedBanner('Task completed and saved to library!');
+            } else {
+                setSavedBanner('Generation complete!');
+            }
 
-                        await loadLibraryAndStats();
-                        if (autoId) await loadChatHistory(autoId);
-                        await rewardXp(20);
-                        setLoading(false);
-                        
-                        setTimeout(() => setSavedBanner(''), 4000);
-                    } else {
-                        setSavedBanner(`Processing: ${task.status.replace('_', ' ')}...`);
-                        setTimeout(checkStatus, 3000);
-                    }
-                } catch (err) {
-                    setError(err.response?.data?.error || err.message || 'Status check failed.');
-                    setLoading(false);
-                    setSavedBanner('');
-                }
-            };
+            persistActive({
+                id: autoId,
+                sourceName: resolvedName,
+                content: resolvedText,
+                data,
+            });
+
+            await loadLibraryAndStats();
+            if (autoId) await loadChatHistory(autoId);
+            await rewardXp(20);
+            setLoading(false);
             
-            checkStatus();
+            setTimeout(() => setSavedBanner(''), 4000);
 
         } catch (generateError) {
             setError(generateError.response?.data?.error || generateError.message || 'AI generation failed.');
