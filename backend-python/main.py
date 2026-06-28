@@ -76,6 +76,9 @@ WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cuda")
 
 
 def _list_supported_gemini_models() -> List[str]:
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return []
     try:
         models = genai.list_models()
         names: List[str] = []
@@ -89,6 +92,9 @@ def _list_supported_gemini_models() -> List[str]:
 
 
 def _pick_gemini_model(preferred: str = "") -> str:
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return preferred or os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     available = _list_supported_gemini_models()
     if not available:
         # Keep a modern default if listing is unavailable.
@@ -367,6 +373,9 @@ def _extract_response_text(response: Any) -> str:
 
 
 def _generate_with_gemini(prompt: str, preferred_model: str = "") -> Dict[str, Any]:
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Gemini API Key is not configured. Please add GEMINI_API_KEY as a Secret in your Hugging Face Space settings.")
     primary = _pick_gemini_model(preferred_model)
     tried = [primary]
     last_error = None
